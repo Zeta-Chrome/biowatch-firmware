@@ -1,4 +1,4 @@
-# BioWatch
+# biowatch-firmware 
 ### A high-performance health monitoring watch.
 
 BioWatch is a professional-grade health monitoring system built on the **STM32WB55** dual-core wireless MCU.
