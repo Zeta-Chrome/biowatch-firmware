@@ -1,14 +1,14 @@
+
 #ifndef DRIVER_OLED_H
 #define DRIVER_OLED_H
 
-#include "drivers/oled/oled_cmds.h"
 #include <stdbool.h>
 #include <stdint.h>
 
 typedef struct 
 {
     uint8_t col; // 0-127
-    uint8_t page; // 0-8
+    uint8_t page; // 0-7
 } oled_coord_t;
 
 void oled_init();

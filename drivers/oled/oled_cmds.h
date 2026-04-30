@@ -74,13 +74,4 @@ typedef struct
     uint32_t len;
 } oled_cmd_buf_t;
 
-// Ring buffer of commands that needs to transmitted
-typedef struct 
-{
-    oled_cmd_buf_t queue[OLED_CMD_RING_SZ];
-    uint8_t head;
-    uint8_t tail;
-    uint8_t count;
-} oled_cmd_ring_t;
-
 #endif
