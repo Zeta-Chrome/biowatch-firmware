@@ -55,7 +55,7 @@ static uint8_t g_retry_counter = 0;
 static void on_initialized(bw_status_t status, void* user_data)
 {
     (void)user_data;
-    if (status == STATUS_I2C_ERR || status == STATUS_I2C_NACKF)
+    if (status != STATUS_OK)
     {
         rtos_event_set_from_isr(&g_event, EVENT_INIT_FAILURE);  
     }
@@ -73,7 +73,7 @@ void oled_init()
     {
         // I2C initialization
         i2c_conf_t conf = {.sda = PL_OLED_SDA, .scl = PL_OLED_SCL, .af = GPIO_AF4, .i2c = PL_OLED_I2C, .speed = I2C_SPEED_FAST, .dnf = 0, .irq_priority = 4};
-        hal_i2c_init(&conf, &g_i2c_h);
+        hal_i2c_init_dma(&conf, &g_i2c_h);
         g_i2c_initialized = true;
     }
 
@@ -81,12 +81,11 @@ void oled_init()
     rtos_event_init(&g_event);
 
     // OLED initialization
-    g_i2c_h.i2c = PL_OLED_I2C;
     g_i2c_h.addr = OLED_ADDR;
     g_i2c_h.buf = g_oled_fb.fb;
     g_i2c_h.len = 26; // 26 Init commands
     g_i2c_h.callback = on_initialized;
-    hal_i2c_transmit(&g_i2c_h); 
+    hal_i2c_transmit_dma(&g_i2c_h); 
     
     uint32_t event_bit;
     bw_status_t status = rtos_event_wait(&g_event, EVENT_INIT_SUCCESS | EVENT_INIT_FAILURE, &event_bit, true, false, 1000);
@@ -103,7 +102,7 @@ void oled_init()
     }
     else if (event_bit & EVENT_INIT_FAILURE)
     {
-        hal_i2c_reset(&g_i2c_h);
+        hal_i2c_reset_dma(&g_i2c_h);
 
         if (g_retry_counter < OLED_MAX_RETRIES)
         {
@@ -136,7 +135,7 @@ bool oled_bus_error()
 static void on_cmd_flushed(bw_status_t status, void *user_data)
 {
     (void)user_data;
-    if (status == STATUS_I2C_ERR || status == STATUS_I2C_NACKF)
+    if (status != STATUS_OK)
     {
         rtos_event_set_from_isr(&g_event, EVENT_CMD_FLUSH_FAILURE); 
     }
@@ -149,7 +148,7 @@ static void on_cmd_flushed(bw_status_t status, void *user_data)
 static void on_fb_flushed(bw_status_t status, void* user_data)
 {
     (void)user_data;
-    if (status == STATUS_I2C_ERR || status == STATUS_I2C_NACKF)
+    if (status != STATUS_OK)
     {
         rtos_event_set_from_isr(&g_event, EVENT_FLUSH_FAILURE); 
     }
@@ -172,13 +171,11 @@ static void flush_cmd()
     oled_cmd_buf_t *cmd_buf;
     queue_peek(&g_cmd_queue, (void**)&cmd_buf);
 
-    g_i2c_h.i2c = PL_OLED_I2C;
     g_i2c_h.addr = OLED_ADDR;
     g_i2c_h.buf = cmd_buf->buf;
     g_i2c_h.len = cmd_buf->len;
     g_i2c_h.callback = on_cmd_flushed;
-
-    hal_i2c_transmit(&g_i2c_h);
+    hal_i2c_transmit_dma(&g_i2c_h);
 
     uint32_t event_bit;
     bw_status_t status = rtos_event_wait(&g_event, EVENT_CMD_FLUSH_SUCCESS | EVENT_CMD_FLUSH_FAILURE, &event_bit, true, false, 1000);
@@ -205,7 +202,7 @@ static void flush_cmd()
     }
     else if (event_bit & EVENT_CMD_FLUSH_FAILURE)
     {
-        hal_i2c_reset(&g_i2c_h);
+        hal_i2c_reset_dma(&g_i2c_h);
         if (g_retry_counter < OLED_MAX_RETRIES)
         {
             BW_LOG("Cmd Flush failed\n");
@@ -243,13 +240,11 @@ void oled_flush()
     g_oled_fb.fb[g_oled_fb.cmd_len++] = OLED_CTRL_DATA_ONLY;
     // clang-format on 
 
-    g_i2c_h.i2c = PL_OLED_I2C;
     g_i2c_h.addr = OLED_ADDR;
     g_i2c_h.buf = g_oled_fb.fb;
     g_i2c_h.len = g_oled_fb.cmd_len + (g_oled_fb.end_page + 1) * OLED_SCREEN_W;
     g_i2c_h.callback = on_fb_flushed;
-
-    hal_i2c_transmit(&g_i2c_h);
+    hal_i2c_transmit_dma(&g_i2c_h);
     
     uint32_t event_bit;
     bw_status_t status = rtos_event_wait(&g_event, EVENT_FLUSH_SUCCESS | EVENT_FLUSH_FAILURE, &event_bit, true, false, 1000);
@@ -271,7 +266,7 @@ void oled_flush()
     }
     else if (event_bit & EVENT_FLUSH_FAILURE)
     {
-        hal_i2c_reset(&g_i2c_h);
+        hal_i2c_reset_dma(&g_i2c_h);
         g_fb_flush_pending = true;
 
         BW_LOG("Flush failed");
