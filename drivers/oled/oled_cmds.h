@@ -9,15 +9,6 @@
 #define OLED_CMD_RING_SZ 100
 #define OLED_CMD_BUF_MAX_SZ 16   
 #define OLED_FB_MAX_SZ 1040
-#define OLED_MAX_RETRIES 4
-
-typedef enum
-{
-    OLED_STATE_I2C_ERR,
-    OLED_STATE_UNINITIALIZED,
-    OLED_STATE_BUSY,
-    OLED_STATE_IDLE,
-} oled_state_t;
 
 typedef enum
 {

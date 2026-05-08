@@ -50,7 +50,6 @@ static queue_t g_cmd_queue;
 static bool g_i2c_initialized = false;
 static oled_state_t g_state = OLED_STATE_UNINITIALIZED;
 static bool g_fb_flush_pending = false;
-static uint8_t g_retry_counter = 0;
 
 static void on_initialized(bw_status_t status, void* user_data)
 {
@@ -91,45 +90,24 @@ void oled_init()
     bw_status_t status = rtos_event_wait(&g_event, EVENT_INIT_SUCCESS | EVENT_INIT_FAILURE, &event_bit, true, false, 1000);
     if (status != STATUS_OK)
     {
-        BW_LOG("Exited with status: %d\n", status);
+        BW_LOG("Oled exited with status: %d\n", status);
         event_bit = EVENT_INIT_FAILURE;
     }
 
     if (event_bit & EVENT_INIT_SUCCESS)
     {
-        g_state = OLED_STATE_IDLE;
-        g_retry_counter = 0;
+        g_state = OLED_STATE_READY;
     }
     else if (event_bit & EVENT_INIT_FAILURE)
     {
+        g_state = OLED_STATE_I2C_ERR;
         hal_i2c_reset_dma(&g_i2c_h);
-
-        if (g_retry_counter < OLED_MAX_RETRIES)
-        {
-            BW_LOG("Init failed\n");
-            g_retry_counter++;
-            oled_init(); // reinit on failure
-        }
-        else 
-        {
-            g_state = OLED_STATE_I2C_ERR;
-        }
     }
 }
 
-bool oled_is_initialized()
+oled_state_t get_oled_state()
 {
-    return g_state > OLED_STATE_UNINITIALIZED;
-}
-
-bool oled_is_flushed()
-{
-    return g_state >= OLED_STATE_IDLE;
-}
-
-bool oled_bus_error()
-{
-    return g_state == OLED_STATE_I2C_ERR;
+    return g_state;
 }
 
 static void on_cmd_flushed(bw_status_t status, void *user_data)
@@ -160,13 +138,10 @@ static void on_fb_flushed(bw_status_t status, void* user_data)
 
 static void flush_cmd()
 {
-    // prevent race conditions
-    if (is_queue_empty(&g_cmd_queue) || !oled_is_flushed())
+    if (is_queue_empty(&g_cmd_queue) || g_state <= OLED_STATE_I2C_ERR)
     {
         return;
     }
-
-    g_state = OLED_STATE_BUSY;
 
     oled_cmd_buf_t *cmd_buf;
     queue_peek(&g_cmd_queue, (void**)&cmd_buf);
@@ -181,15 +156,13 @@ static void flush_cmd()
     bw_status_t status = rtos_event_wait(&g_event, EVENT_CMD_FLUSH_SUCCESS | EVENT_CMD_FLUSH_FAILURE, &event_bit, true, false, 1000);
     if (status != STATUS_OK)
     {
-        BW_LOG("Exited with status: %d\n", status);
+        BW_LOG("Oled exited with status: %d\n", status);
         event_bit = EVENT_CMD_FLUSH_FAILURE;
     }
 
-    g_state = OLED_STATE_IDLE;
     if (event_bit & EVENT_CMD_FLUSH_SUCCESS)
     {
-        g_state = OLED_STATE_IDLE; 
-        g_retry_counter = 0;
+        g_state = OLED_STATE_READY; 
 
         // Drain on completion
         queue_pop(&g_cmd_queue, NULL);
@@ -202,30 +175,18 @@ static void flush_cmd()
     }
     else if (event_bit & EVENT_CMD_FLUSH_FAILURE)
     {
+        g_state = OLED_STATE_I2C_ERR;
         hal_i2c_reset_dma(&g_i2c_h);
-        if (g_retry_counter < OLED_MAX_RETRIES)
-        {
-            BW_LOG("Cmd Flush failed\n");
-            g_retry_counter++;
-            flush_cmd();
-        }
-        else 
-        {
-            g_state = OLED_STATE_I2C_ERR;
-        }
     }
 }
 
 void oled_flush()
 {
-    // prevent race conditions
-    if (!oled_is_flushed())
+    if (g_state <= OLED_STATE_I2C_ERR)
     {
         g_fb_flush_pending = true; 
         return;
     }
-
-    g_state = OLED_STATE_BUSY;
 
     // Initialize fb commands
     g_oled_fb.cmd_len = 0;
@@ -250,13 +211,13 @@ void oled_flush()
     bw_status_t status = rtos_event_wait(&g_event, EVENT_FLUSH_SUCCESS | EVENT_FLUSH_FAILURE, &event_bit, true, false, 1000);
     if (status != STATUS_OK)
     {
-        BW_LOG("Exited with status: %d\n", status);
+        BW_LOG("Oled exited with status: %d\n", status);
         event_bit = EVENT_FLUSH_FAILURE;
     }
 
-    g_state = OLED_STATE_IDLE;
     if (event_bit & EVENT_FLUSH_SUCCESS)
     {
+        g_state = OLED_STATE_READY;
         flush_cmd(); // flush next command if available
 
         if(g_fb_flush_pending)
@@ -266,10 +227,10 @@ void oled_flush()
     }
     else if (event_bit & EVENT_FLUSH_FAILURE)
     {
-        hal_i2c_reset_dma(&g_i2c_h);
+        BW_LOG("Oled Flush failed");
+        g_state = OLED_STATE_I2C_ERR;
         g_fb_flush_pending = true;
-
-        BW_LOG("Flush failed");
+        hal_i2c_reset_dma(&g_i2c_h);
     }
 
     // Now reset the end_page
@@ -399,7 +360,6 @@ void oled_set_brightness(uint8_t value)
 
 void oled_clear_screen()
 {
-    // Don't waste time if the state is errored
     if (g_state <= OLED_STATE_I2C_ERR)
     {
         return;
@@ -411,7 +371,6 @@ void oled_clear_screen()
 
 void oled_fill_rect(oled_coord_t top_left, oled_coord_t bottom_right, uint8_t value)
 {
-    // Don't waste time if the state is errored
     if (g_state <= OLED_STATE_I2C_ERR)
     {
         return;
@@ -429,7 +388,6 @@ void oled_fill_rect(oled_coord_t top_left, oled_coord_t bottom_right, uint8_t va
 
 void oled_draw_bitmap(oled_coord_t top_left, uint8_t cols, uint8_t pages, const uint8_t *data)
 {
-    // Don't waste time if the state is errored
     if (g_state <= OLED_STATE_I2C_ERR)
     {
         return;

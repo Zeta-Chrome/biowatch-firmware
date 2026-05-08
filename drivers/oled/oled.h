@@ -5,6 +5,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+typedef enum
+{
+    OLED_STATE_UNINITIALIZED,
+    OLED_STATE_I2C_ERR,
+    OLED_STATE_READY
+} oled_state_t;
+
 typedef struct 
 {
     uint8_t col; // 0-127
@@ -12,9 +19,7 @@ typedef struct
 } oled_coord_t;
 
 void oled_init();
-bool oled_is_initialized();
-bool oled_is_flushed();
-bool oled_bus_error();
+oled_state_t get_oled_state();
 
 void oled_power_on();
 void oled_power_off();
