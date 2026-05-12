@@ -173,7 +173,11 @@ ifeq ($(METHOD), stlink)
 	@$(OCD) \
 		-c "init" \
 		-c "reset run" \
-		$(OCD_RTT)
+		$(OCD_RTT) & OCD_PID=$$!; \
+		trap "kill $$OCD_PID 2>/dev/null; wait $$OCD_PID 2>/dev/null" INT TERM EXIT; \
+		until nc -z localhost $(RTT_PORT) 2>/dev/null; do sleep 0.1; done; \
+		nc localhost $(RTT_PORT) & NC_PID=$$!; \
+		wait $$OCD_PID
 else
 	@echo "Server only supported with STLink"
 endif
