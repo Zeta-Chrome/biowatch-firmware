@@ -7,8 +7,8 @@
 #define PL_OXIM_I2C I2C1
 #define PL_OXIM_SDA PB7
 #define PL_OXIM_SCL PB6
-#define PL_OXIM_EXTI PA0
-#define PL_OXIM_EXTI_IRQn EXTI0_IRQn
+#define PL_OXIM_EXTI PB1
+#define PL_OXIM_EXTI_IRQn EXTI1_IRQn
 
 #define PL_BARO_I2C I2C1
 #define PL_BARO_SDA PB7
@@ -23,10 +23,11 @@
 #define PL_IMU_SCLK PA5
 #define PL_IMU_MISO PA6
 #define PL_IMU_MOSI PB5
-#define PL_IMU_EXTI1 PB0
-#define PL_IMU_EXTI2 PB1
-#define PL_IMU_EXTI1_IRQn EXTI0_IRQn
-#define PL_IMU_EXTI2_IRQn EXTI1_IRQn
+#define PL_IMU_EXTI1 PA3
+#define PL_IMU_EXTI1_IRQn EXTI3_IRQn
+
+#define PL_VIB_PIN PA10
+#define PL_BUZZ_PIN PB2
 
 void bsp_init();
 

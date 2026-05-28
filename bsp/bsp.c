@@ -85,8 +85,11 @@ void peripheral_init()
 void bsp_init()
 {
     fault_init();
-    hal_clock_init();
-    hal_systick_init(0);
     bw_logger_init();
-    peripheral_init();
+
+    clock_conf_t clock_conf = clock_conf_performance();
+    hal_clock_reconfigure(&clock_conf);
+
+    hal_systick_init(0);
+    peripheral_init(); 
 }
