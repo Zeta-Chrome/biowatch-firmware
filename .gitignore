@@ -1,6 +1,5 @@
 .gdb_history
 .cache
-openocd.cfg
 docs
 build
 compile_commands.json
