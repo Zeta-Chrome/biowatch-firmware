@@ -1,7 +1,7 @@
-
 #ifndef DRIVER_OLED_H
 #define DRIVER_OLED_H
 
+#include "hal/i2c/i2c.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -12,14 +12,15 @@ typedef enum
     OLED_STATE_READY
 } oled_state_t;
 
-typedef struct 
+typedef struct
 {
-    uint8_t col; // 0-127
-    uint8_t page; // 0-7
+    uint8_t col;   // 0-127
+    uint8_t page;  // 0-7
 } oled_coord_t;
 
 void oled_init();
-oled_state_t get_oled_state();
+oled_state_t oled_get_state();
+i2c_handle_t *oled_get_i2c_handle();
 
 void oled_power_on();
 void oled_power_off();

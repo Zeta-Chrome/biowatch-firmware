@@ -1,6 +1,5 @@
 #include "oled.h"
 #include "oled_cmds.h"
-#include "platform.h"
 #include "utils/containers/queue.h"
 #include "utils/utils.h"
 #include "utils/status.h"
@@ -47,7 +46,6 @@ static event_t g_event;
 static i2c_handle_t g_i2c_h;
 static oled_cmd_buf_t g_cmd_queue_buf[OLED_CMD_RING_SZ]; 
 static queue_t g_cmd_queue;
-static bool g_i2c_initialized = false;
 static oled_state_t g_state = OLED_STATE_UNINITIALIZED;
 static bool g_fb_flush_pending = false;
 
@@ -68,14 +66,6 @@ void oled_init()
 {
     g_state = OLED_STATE_UNINITIALIZED;
     
-    if (!g_i2c_initialized)
-    {
-        // I2C initialization
-        i2c_conf_t conf = {.sda = PL_OLED_SDA, .scl = PL_OLED_SCL, .af = GPIO_AF4, .i2c = PL_OLED_I2C, .speed = I2C_SPEED_FAST, .dnf = 0, .irq_priority = 4};
-        hal_i2c_init_dma(&conf, &g_i2c_h);
-        g_i2c_initialized = true;
-    }
-
     queue_init(&g_cmd_queue, g_cmd_queue_buf, sizeof(g_cmd_queue_buf[0]), OLED_CMD_RING_SZ);
     rtos_event_init(&g_event);
 
@@ -105,9 +95,14 @@ void oled_init()
     }
 }
 
-oled_state_t get_oled_state()
+oled_state_t oled_get_state()
 {
     return g_state;
+}
+
+i2c_handle_t *oled_get_i2c_handle()
+{
+    return &g_i2c_h;
 }
 
 static void on_cmd_flushed(bw_status_t status, void *user_data)
