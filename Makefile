@@ -86,6 +86,9 @@ C_SOURCES := $(shell find . -type f -name "*.c" \
 # Objects
 OBJECTS := $(patsubst %.c, $(BUILD_DIR)/%.o, $(C_SOURCES))
 
+#STM32_Programmer_CLI
+STM32_Programmer_CLI := ${STM32_PRG_PATH}/STM32_Programmer_CLI
+
 # OpenOCD
 OCD     := openocd -f openocd.cfg
 OCD_RTT := -c "rtt_start $(RTT_PORT)"
@@ -135,10 +138,10 @@ $(BUILD_DIR):
 flash: all
 ifeq ($(METHOD), stlink)
 	@echo "Flashing via STLink..."
-	@STM32_Programmer_CLI -c port=SWD mode=UR reset=HWrst -d $(BUILD_DIR)/$(TARGET).elf -v -rst
+	@${STM32_Programmer_CLI} -c port=SWD mode=UR reset=HWrst -d $(BUILD_DIR)/$(TARGET).elf -v -rst
 else
 	@echo "Flashing via DFU..."
-	@STM32_Programmer_CLI -c port=USB1 -d $(BUILD_DIR)/$(TARGET).elf -v
+	@${STM32_Programmer_CLI} -c port=USB1 -d $(BUILD_DIR)/$(TARGET).elf -v
 endif
 
 # Monitor
@@ -203,26 +206,26 @@ flash_ble:
 		echo "Set BLE_STACK_DIR=/path/to/binaries"; \
 		exit 1; }
 	@echo "Flashing BLE stack, do not disconnect..."
-	@STM32_Programmer_CLI -c port=SWD mode=UR freq=100 reset=HWrst -startfus
-	@STM32_Programmer_CLI -c port=SWD mode=UR freq=100 reset=HWrst \
+	@${STM32_Programmer_CLI} -c port=SWD mode=UR freq=100 reset=HWrst -startfus
+	@${STM32_Programmer_CLI} -c port=SWD mode=UR freq=100 reset=HWrst \
 		-fwupgrade $(BLE_STACK_BIN) $(BLE_STACK_ADDR) firstinstall=0
-	@STM32_Programmer_CLI -c port=swd mode=UR -ob nSWboot0=1 nboot1=1 nboot0=1
+	@${STM32_Programmer_CLI} -c port=swd mode=UR -ob nSWboot0=1 nboot1=1 nboot0=1
 	@echo "BLE stack flashed"
 
 # Flash full chip
 flash_all: flash_ble flash
 
 recover:
-	@STM32_Programmer_CLI -c port=SWD mode=UR reset=HWrst freq=100 \
+	@${STM32_Programmer_CLI} -c port=SWD mode=UR reset=HWrst freq=100 \
     	-ob RDP=0xAA PCROP_RDP=0
 	sleep 2
-	@STM32_Programmer_CLI -c port=SWD mode=UR reset=HWrst freq=100 \
+	@${STM32_Programmer_CLI} -c port=SWD mode=UR reset=HWrst freq=100 \
     	-w32 0x5800040C 0x00008000
-	@STM32_Programmer_CLI -c port=SWD mode=UR reset=HWrst freq=100 \
+	@${STM32_Programmer_CLI} -c port=SWD mode=UR reset=HWrst freq=100 \
     	-ob displ
 
 erase:
-	@STM32_Programmer_CLI -c port=SWD mode=UR reset=HWrst freq=100 -e all
+	@${STM32_Programmer_CLI} -c port=SWD mode=UR reset=HWrst freq=100 -e all
 
 clean:
 	@rm -rf $(BUILD_DIR)
