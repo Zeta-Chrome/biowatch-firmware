@@ -285,8 +285,6 @@ static void build_grid_container(ui_widget_t *widget)
 
 void ui_widget_build(ui_widget_t *widget)
 {
-    BW_PRINT("(%d, %d, %d, %d)\n", widget->bb.x, widget->bb.y, widget->bb.w, widget->bb.h);
-
     if (widget->type == UI_WIDGET_TYPE_CONTAINER)
     {
         ui_widget_t *child;
