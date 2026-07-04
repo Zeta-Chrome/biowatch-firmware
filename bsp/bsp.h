@@ -1,5 +1,5 @@
-#ifndef BSP_H 
-#define BSP_H 
+#ifndef BSP_H
+#define BSP_H
 
 #include "pins.h"
 #include "stm32wb55xx.h"

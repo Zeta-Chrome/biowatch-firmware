@@ -72,6 +72,7 @@ LDFLAGS += -L$(CORE_BUILD) -lbwcore -lc -lm -lnosys
 # Includes
 C_INCLUDES := \
     -I. \
+    -Iui \
     -Ibsp \
     -Idrivers \
     -I$(CORE_DIR) \
@@ -188,7 +189,7 @@ endif
 # Debug — attach GDB to running server (make server first)
 debug:
 ifeq ($(METHOD), stlink)
-	@$(PREFIX)gdb \
+	@$(PREFIX)gdb -tui\
 		-ex "set remotetimeout 10" \
 		-ex "target extended-remote :3333" \
 		-ex "monitor reset halt" \

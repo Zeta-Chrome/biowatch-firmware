@@ -1,9 +1,9 @@
-#include "oxim.h"
+#include "bsp.h"
 #include "hal/exti/exti.h"
 #include "hal/gpio/gpio.h"
 #include "hal/i2c/i2c.h"
+#include "oxim.h"
 #include "oxim/oxim_regs.h"
-#include "bsp.h"
 #include "rtos/sync/event.h"
 #include "utils/status.h"
 #include "utils/utils.h"
@@ -33,6 +33,7 @@ static oxim_data_t g_data;
 
 static void on_interrupt(void *user_data)
 {
+    (void)user_data;
     BW_LOG("INT fired\n");
     rtos_event_set(&g_event, EVENT_INT);
 }
@@ -54,7 +55,7 @@ static void on_i2c_callback(bw_status_t status, void *user_data)
         BW_LOG("NACK after %d bytes remaining\n", g_i2c_h.remaining);
         rtos_event_set(&g_event, EVENT_NACK);
     }
-    else  // i2c err or dma error
+    else // i2c err or dma error
     {
         rtos_event_set(&g_event, EVENT_ERR);
     }
@@ -70,14 +71,15 @@ static bw_status_t transmit_and_wait(uint8_t *buf, uint8_t len, bool repeat, voi
     hal_i2c_transmit_dma(&g_i2c_h);
 
     uint32_t event_bit;
-    bw_status_t status = rtos_event_wait(&g_event, EVENT_OK | EVENT_NACK | EVENT_ERR,
-                                         &event_bit, true, false, 1000);
+    bw_status_t status =
+        rtos_event_wait(&g_event, EVENT_OK | EVENT_NACK | EVENT_ERR, &event_bit, true, false, 1000);
 
     if (status == STATUS_TIMEOUT || (event_bit & (EVENT_NACK | EVENT_ERR)))
     {
-        BW_LOG("I2C Write Fail: %s\n", (status == STATUS_TIMEOUT)   ? "TIMEOUT"
-                                         : (event_bit & EVENT_NACK) ? "NACK"
-                                                                    : "ERR");
+        BW_LOG("I2C Write Fail: %s\n",
+               (status == STATUS_TIMEOUT) ? "TIMEOUT"
+               : (event_bit & EVENT_NACK) ? "NACK"
+                                          : "ERR");
         return STATUS_ERR;
     }
     return STATUS_OK;
@@ -157,7 +159,7 @@ void oxim_init(oxim_smp_avg_t smp_avg, oxim_smp_rate_t smp_rate, oxim_smp_t samp
         g_tx_buf[0] = OXIM_MODE_CONF;
         g_tx_buf[1] = OXIM_MODE_CONF_RST_Msk;
         bw_status_t status = transmit_and_wait(g_tx_buf, 2, false, NULL);
-        if (status != STATUS_OK)  // If transmission failed, the oximeter is off
+        if (status != STATUS_OK) // If transmission failed, the oximeter is off
         {
             status = rtos_event_wait(&g_event, EVENT_INT, NULL, true, true, 2000);
             if (status == STATUS_TIMEOUT)
@@ -344,7 +346,7 @@ bw_status_t oxim_read(oxim_mode_t mode)
         BW_LOG("Oximeter triggered interrupt\nST1: %x, ST2: %x\n", g_rx_buf[0], g_rx_buf[1]);
 
         // Read FIFO data
-        g_tx_buf[0] = OXIM_FIFO_DATA;  // start reading from INT status reg 1
+        g_tx_buf[0] = OXIM_FIFO_DATA; // start reading from INT status reg 1
         status = transmit_and_wait(g_tx_buf, 1, true, read_fifo);
         if (status == STATUS_ERR)
         {

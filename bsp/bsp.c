@@ -1,46 +1,53 @@
-#include "bsp.h"
 #include "baro/baro.h"
-#include "core/utils/logger.h"
+#include "bsp.h"
 #include "core/hal/clock/clock.h"
-#include "core/hal/systick/systick.h"
+#include "core/utils/logger.h"
+#include "display/display.h"
 #include "hal/exti/exti.h"
 #include "hal/gpio/gpio.h"
 #include "hal/spi/spi.h"
 #include "imu/imu.h"
-#include "oled/oled.h"
 #include "oxim/oxim.h"
 #include "utils/utils.h"
 
-void fault_init(void)
+static void fault_init(void)
 {
     SCB->SHCSR |= (SCB_SHCSR_USGFAULTENA_Msk | SCB_SHCSR_BUSFAULTENA_Msk | SCB_SHCSR_MEMFAULTENA_Msk);
 
     SCB->CCR |= SCB_CCR_DIV_0_TRP_Msk;
-    SCB->CCR |= SCB_CCR_UNALIGN_TRP_Msk;
 }
 
-void peripheral_init()
+static void sys_pwr_config()
 {
+    PWR->C2CR1 = (PWR->C2CR1 & ~PWR_C2CR1_LPMS) | PWR_CR1_LPMS_2;
+}
+
+static void peripheral_init()
+{
+    // BLE EXTI Init
+    hal_exti_enable_line(36); // IPCC wakeup interrupts
+    hal_exti_enable_line(38); // HSEM wakeup interrupts
+
     // OLED I2C init
-    i2c_conf_t conf = {.sda = PL_OLED_SDA,
-                       .scl = PL_OLED_SCL,
-                       .af = GPIO_AF4,
-                       .i2c = PL_OLED_I2C,
-                       .speed = I2C_SPEED_FAST,
-                       .dnf = 0,
-                       .irq_priority = 4};
-    hal_i2c_init_dma(&conf, oled_get_i2c_handle());
-    
+    i2c_conf_t oled_i2c_conf = {.sda = PL_OLED_SDA,
+                                .scl = PL_OLED_SCL,
+                                .af = GPIO_AF4,
+                                .i2c = PL_OLED_I2C,
+                                .speed = I2C_SPEED_FAST,
+                                .dnf = 0,
+                                .irq_priority = 4};
+    hal_i2c_init_dma(&oled_i2c_conf, display_get_i2c_handle());
+
     // Oximeter EXTI init
     exti_callback_t callback;
     exti_handle_t *oxim_exti_h = oxim_get_exti_handle(&callback);
-    exti_conf_t exti_conf = {.gpio = PL_OXIM_EXTI,
-                             .edge = EXTI_EDGE_FALLING,
-                             .irq = PL_OXIM_EXTI_IRQn,
-                             .irq_priority = 6,
-                             .callback = callback,
-                             .user_data = NULL};
-    hal_exti_gpio_init(&exti_conf, oxim_exti_h);
+    exti_conf_t oxim_exti_conf = {.gpio = PL_OXIM_EXTI,
+                                  .edge = EXTI_EDGE_FALLING,
+                                  .irq = PL_OXIM_EXTI_IRQn,
+                                  .irq_priority = 6,
+                                  .callback = callback,
+                                  .user_data = NULL};
+    hal_exti_gpio_init(&oxim_exti_conf, oxim_exti_h);
 
     // Oximeter I2C init
     i2c_conf_t i2c_conf = {.sda = PL_OXIM_SDA,
@@ -57,7 +64,7 @@ void peripheral_init()
     // IMU CS init
     gpio_conf_t cs_conf = gpio_conf_output(PL_IMU_CS, GPIO_SPEED_MEDIUM);
     hal_gpio_init(&cs_conf);
-    
+
     // IMU SPI Init
     spi_conf_t spi_conf = {.spi = PL_IMU_SPI,
                            .mosi = PL_IMU_MOSI,
@@ -70,15 +77,15 @@ void peripheral_init()
                            .frame_format = SPI_FRAME_FORMAT_MSBFIRST,
                            .irq_priority = 4};
     hal_spi_init_dma(&spi_conf, imu_get_spi_handle());
-    
+
     // SPI EXTI init
-    exti_handle_t* imu_exti_h = imu_get_exti_handle(&callback);
+    exti_handle_t *imu_exti_h = imu_get_exti_handle(&callback);
     exti_conf_t imu_exti_conf = {.gpio = PL_IMU_EXTI1,
-                             .edge = EXTI_EDGE_FALLING,
-                             .irq = PL_IMU_EXTI1_IRQn,
-                             .irq_priority = 6,
-                             .callback = callback,
-                             .user_data = NULL};
+                                 .edge = EXTI_EDGE_FALLING,
+                                 .irq = PL_IMU_EXTI1_IRQn,
+                                 .irq_priority = 6,
+                                 .callback = callback,
+                                 .user_data = NULL};
     hal_exti_gpio_init(&imu_exti_conf, imu_exti_h);
 }
 
@@ -90,6 +97,6 @@ void bsp_init()
     clock_conf_t clock_conf = clock_conf_performance();
     hal_clock_reconfigure(&clock_conf);
 
-    hal_systick_init(0);
-    peripheral_init(); 
+    sys_pwr_config();
+    peripheral_init();
 }
