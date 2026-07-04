@@ -5,7 +5,9 @@
 #include "display/display.h"
 #include "hal/exti/exti.h"
 #include "hal/gpio/gpio.h"
+#include "hal/i2c/i2c_bus.h"
 #include "hal/spi/spi.h"
+#include "hygro/hygro.h"
 #include "imu/imu.h"
 #include "oxim/oxim.h"
 #include "utils/utils.h"
@@ -59,7 +61,10 @@ static void peripheral_init()
                            .irq_priority = 6};
     hal_i2c_init_dma(&i2c_conf, oxim_get_i2c_handle());
     // Copy the handles
-    *baro_get_i2c_handle() = *oxim_get_i2c_handle();
+    *hygro_get_i2c_handle() = *oxim_get_i2c_handle();
+
+    // Initialize the i2c bus for oximeter and hygrometer
+    hal_i2c_bus_init(oxim_get_i2c_handle()->perip);
 
     // IMU CS init
     gpio_conf_t cs_conf = gpio_conf_output(PL_IMU_CS, GPIO_SPEED_MEDIUM);

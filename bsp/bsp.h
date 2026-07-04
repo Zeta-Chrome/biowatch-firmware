@@ -10,9 +10,9 @@
 #define PL_OXIM_EXTI PB1
 #define PL_OXIM_EXTI_IRQn EXTI1_IRQn
 
-#define PL_BARO_I2C I2C1
-#define PL_BARO_SDA PB7
-#define PL_BARO_SCL PB6
+#define PL_HYGRO_I2C I2C1
+#define PL_HYGRO_SDA PB7
+#define PL_HYGRO_SCL PB6
 
 #define PL_OLED_I2C I2C3
 #define PL_OLED_SDA PB4
