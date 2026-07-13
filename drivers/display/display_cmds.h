@@ -1,7 +1,7 @@
-#ifndef HAL_DISPLAY_CMDS_H
-#define HAL_DISPLAY_CMDS_H
+#ifndef DRIVER_DISPLAY_CMDS_H
+#define DRIVER_DISPLAY_CMDS_H
 
-#include "display/display.h"
+#include "display.h"
 #include <stdint.h>
 
 #define DISPLAY_PAGE_COUNT DISPLAY_SCREEN_H / 8

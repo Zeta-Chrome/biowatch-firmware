@@ -1,7 +1,7 @@
 #ifndef BMP_H
 #define BMP_H
 
-#include "ui/ui_common.h"
+#include "subsys/ui/ui_common.h"
 
 typedef struct
 {

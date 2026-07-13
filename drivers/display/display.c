@@ -1,10 +1,10 @@
 #include "display.h"
 #include "display_cmds.h"
-#include "hal/i2c/i2c.h"
-#include "rtos/sync/event.h"
-#include "utils/containers/queue.h"
-#include "utils/status.h"
-#include "utils/utils.h"
+#include "drivers/i2c/i2c.h"
+#include "kernel/sync/event.h"
+#include "lib/containers/queue.h"
+#include "lib/status.h"
+#include "lib/utils.h"
 #include <string.h>
 
 #define DISPLAY_ADDR 0x3C
@@ -54,11 +54,11 @@ static void on_initialized(bw_status_t status, void* user_data)
     (void)user_data;
     if (status != STATUS_OK)
     {
-        rtos_event_set_from_isr(&g_event, EVENT_INIT_FAILURE);  
+        kernel_event_set_from_isr(&g_event, EVENT_INIT_FAILURE);  
     }
     else 
     {
-        rtos_event_set_from_isr(&g_event, EVENT_INIT_SUCCESS); 
+        kernel_event_set_from_isr(&g_event, EVENT_INIT_SUCCESS); 
     }
 }
 
@@ -83,7 +83,7 @@ void display_init(bool invert_x, bool invert_y)
     g_state = DISPLAY_STATE_UNINITIALIZED;
     
     queue_init(&g_cmd_queue, g_cmd_queue_buf, sizeof(g_cmd_queue_buf[0]), DISPLAY_CMD_RING_SZ);
-    rtos_event_init(&g_event);
+    kernel_event_init(&g_event);
 
     g_fb.buf[9] = invert_x ? DISPLAY_CMD_SEG_REMAP_START_127 : DISPLAY_CMD_SEG_REMAP_START_0;
     g_fb.buf[10] = invert_y ? DISPLAY_CMD_SCAN_DIR_REMAPPED : DISPLAY_CMD_SCAN_DIR_NORMAL;
@@ -95,13 +95,13 @@ void display_init(bool invert_x, bool invert_y)
         g_i2c_h.buf = g_fb.buf;
         g_i2c_h.len = g_fb.cmd_len;
         g_i2c_h.callback = on_initialized;
-        hal_i2c_transmit_dma(&g_i2c_h); 
+        i2c_transmit_dma(&g_i2c_h); 
     
         uint32_t event_bit;
-        bw_status_t status = rtos_event_wait(&g_event, EVENT_INIT_SUCCESS | EVENT_INIT_FAILURE, &event_bit, true, false, 1000);
+        bw_status_t status = kernel_event_wait(&g_event, EVENT_INIT_SUCCESS | EVENT_INIT_FAILURE, &event_bit, true, false, 1000);
         if (status != STATUS_OK)
         {
-            BW_LOG("display exited with status: %d\n", status);
+            BW_LOG("Display exited with status: %d\n", status);
             event_bit = EVENT_INIT_FAILURE;
         }
 
@@ -115,7 +115,7 @@ void display_init(bool invert_x, bool invert_y)
         {
             if (g_retry_counter++ < MAX_RETRY_COUNTER)
             {
-                hal_i2c_reset_dma(&g_i2c_h);
+                i2c_reset_dma(&g_i2c_h);
                 continue;
             }
             g_state = DISPLAY_STATE_I2C_ERR;
@@ -138,11 +138,11 @@ static void on_cmd_flushed(bw_status_t status, void *user_data)
     (void)user_data;
     if (status != STATUS_OK)
     {
-        rtos_event_set_from_isr(&g_event, EVENT_CMD_FLUSH_FAILURE); 
+        kernel_event_set_from_isr(&g_event, EVENT_CMD_FLUSH_FAILURE); 
     }
     else
     {
-        rtos_event_set_from_isr(&g_event, EVENT_CMD_FLUSH_SUCCESS); 
+        kernel_event_set_from_isr(&g_event, EVENT_CMD_FLUSH_SUCCESS); 
     } 
 }
 
@@ -151,11 +151,11 @@ static void on_fb_flushed(bw_status_t status, void* user_data)
     (void)user_data;
     if (status != STATUS_OK)
     {
-        rtos_event_set_from_isr(&g_event, EVENT_FLUSH_FAILURE); 
+        kernel_event_set_from_isr(&g_event, EVENT_FLUSH_FAILURE); 
     }
     else
     {
-        rtos_event_set_from_isr(&g_event, EVENT_FLUSH_SUCCESS); 
+        kernel_event_set_from_isr(&g_event, EVENT_FLUSH_SUCCESS); 
     }
 }
 
@@ -173,12 +173,12 @@ static void flush_cmd()
         g_i2c_h.buf = cmd_buf->buf;
         g_i2c_h.len = cmd_buf->len;
         g_i2c_h.callback = on_cmd_flushed;
-        hal_i2c_transmit_dma(&g_i2c_h);
+        i2c_transmit_dma(&g_i2c_h);
 
-        bw_status_t status = rtos_event_wait(&g_event, wait_evts, &event_bit, true, false, 1000);
+        bw_status_t status = kernel_event_wait(&g_event, wait_evts, &event_bit, true, false, 1000);
         if (status != STATUS_OK)
         {
-            BW_LOG("display exited with status: %d\n", status);
+            BW_LOG("Display exited with status: %d\n", status);
             event_bit = EVENT_CMD_FLUSH_FAILURE;
         }
 
@@ -192,7 +192,7 @@ static void flush_cmd()
         {
             if (g_retry_counter++ < MAX_RETRY_COUNTER)
             {
-                hal_i2c_reset_dma(&g_i2c_h);
+                i2c_reset_dma(&g_i2c_h);
                 continue;
             }
             g_state = DISPLAY_STATE_I2C_ERR;
@@ -405,7 +405,7 @@ void display_draw_bitmap(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8
     if (epage == spage)
     {
         uint8_t mask = MASK(h, offset);
-        for (size_t col = x; col <= x + w - 1; col++)
+        for (int col = x; col <= x + w - 1; col++)
         {
             idx = g_fb.cmd_len + spage * DISPLAY_SCREEN_W + col;
             g_fb.buf[idx] = (g_fb.buf[idx] & ~mask) | ((data[i] << offset) & mask);
@@ -418,7 +418,7 @@ void display_draw_bitmap(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8
     if (y % 8 != 0)
     {
         uint8_t mask = 0xFF << offset;
-        for (size_t col = x; col <= x + w - 1; col++)
+        for (int col = x; col <= x + w - 1; col++)
         {
             idx = g_fb.cmd_len + spage * DISPLAY_SCREEN_W + col;
             g_fb.buf[idx] = (g_fb.buf[idx] & ~mask) | (data[i] << offset);
@@ -428,7 +428,7 @@ void display_draw_bitmap(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8
 
     for (int page = ((y + 7)/ 8); page <= ((y + h) / 8 - 1); page++)
     {
-        for (size_t col = x; col <= x + w - 1; col++)
+        for (int col = x; col <= x + w - 1; col++)
         {
             idx = g_fb.cmd_len + page * DISPLAY_SCREEN_W + col;
             g_fb.buf[idx] = (data[i - w] >> (8 - offset)) | (data[i] << offset);
@@ -439,7 +439,7 @@ void display_draw_bitmap(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8
     if ((y + h) % 8 != 0)
     {
         uint8_t mask = 0xFF >> (8 - (y + h) % 8);
-        for (size_t col = x; col <= x + w - 1; col++)
+        for (int col = x; col <= x + w - 1; col++)
         {
             idx = g_fb.cmd_len + epage * DISPLAY_SCREEN_W + col;
             g_fb.buf[idx] = (((data[i - w] >> (8 - offset)) | (data[i] << offset)) & mask) | (g_fb.buf[idx] & ~mask);
@@ -512,13 +512,13 @@ void display_flush()
     g_i2c_h.buf = g_fb.buf;
     g_i2c_h.len = g_fb.cmd_len + g_fb.num_pages * DISPLAY_SCREEN_W;
     g_i2c_h.callback = on_fb_flushed;
-    hal_i2c_transmit_dma(&g_i2c_h);
+    i2c_transmit_dma(&g_i2c_h);
     
     uint32_t event_bit;
-    bw_status_t status = rtos_event_wait(&g_event, EVENT_FLUSH_SUCCESS | EVENT_FLUSH_FAILURE, &event_bit, true, false, 1000);
+    bw_status_t status = kernel_event_wait(&g_event, EVENT_FLUSH_SUCCESS | EVENT_FLUSH_FAILURE, &event_bit, true, false, 1000);
     if (status != STATUS_OK)
     {
-        BW_LOG("display exited with status: %d\n", status);
+        BW_LOG("Display exited with status: %d\n", status);
         event_bit = EVENT_FLUSH_FAILURE;
     }
 
@@ -535,7 +535,7 @@ void display_flush()
         if (g_retry_counter++ < MAX_RETRY_COUNTER)
         {
             BW_LOG("Display flush failed");
-            hal_i2c_reset_dma(&g_i2c_h);
+            i2c_reset_dma(&g_i2c_h);
         }
         else
         {

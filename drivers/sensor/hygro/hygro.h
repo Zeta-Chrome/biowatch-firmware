@@ -1,7 +1,7 @@
 #ifndef DRIVER_HYGRO_H
 #define DRIVER_HYGRO_H
 
-#include "hal/i2c/i2c.h"
+#include "drivers/i2c/i2c.h"
 
 typedef enum
 {

@@ -3,8 +3,8 @@
 
 #include "assets/bitmaps/bitmaps.h"
 #include "assets/fonts/font.h"
-#include "ui/ui_common.h"
-#include "utils/containers/clist.h"
+#include "lib/containers/clist.h"
+#include "ui_common.h"
 #include <stdbool.h>
 #include <stdint.h>
 

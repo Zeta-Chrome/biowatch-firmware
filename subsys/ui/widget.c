@@ -1,6 +1,6 @@
-#include "display/display.h"
-#include "ui/ui_common.h"
-#include "utils/utils.h"
+#include "drivers/display/display.h"
+#include "lib/utils.h"
+#include "ui_common.h"
 #include "widget.h"
 #include <string.h>
 

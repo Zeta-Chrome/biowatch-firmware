@@ -1,10 +1,10 @@
-#include "hal/i2c/i2c.h"
-#include "hal/i2c/i2c_bus.h"
+#include "drivers/i2c/i2c.h"
+#include "drivers/i2c/i2c_bus.h"
 #include "hygro.h"
 #include "hygro_regs.h"
-#include "rtos/sync/event.h"
-#include "rtos/task/task.h"
-#include "utils/status.h"
+#include "kernel/sync/event.h"
+#include "kernel/task/task.h"
+#include "lib/status.h"
 #include <stdint.h>
 
 #define HYGRO_ADDR 0x44
@@ -21,15 +21,15 @@ static void on_i2c_callback(bw_status_t status, void *user_data)
     (void)user_data;
     if (status == STATUS_OK)
     {
-        rtos_event_set(&g_event, EVENT_OK);
+        kernel_event_set(&g_event, EVENT_OK);
     }
     else if (status == STATUS_I2C_NACKF)
     {
-        rtos_event_set(&g_event, EVENT_NACK);
+        kernel_event_set(&g_event, EVENT_NACK);
     }
     else // i2c err or dma error
     {
-        rtos_event_set(&g_event, EVENT_ERR);
+        kernel_event_set(&g_event, EVENT_ERR);
     }
 }
 
@@ -39,12 +39,12 @@ static bw_status_t send_cmd(uint8_t msb, uint8_t lsb)
     g_trnf_buf[1] = lsb;
     g_i2c_h.len = 2; // Always 2 byte commands
 
-    hal_i2c_bus_lock(g_i2c_h.perip);
-    hal_i2c_transmit(&g_i2c_h);
+    i2c_bus_lock(g_i2c_h.perip);
+    i2c_transmit(&g_i2c_h);
 
     uint32_t event_bit;
-    bw_status_t status = rtos_event_wait(&g_event, EVENT_OK | EVENT_NACK | EVENT_ERR, &event_bit, true, false, 1000);
-    hal_i2c_bus_unlock(g_i2c_h.perip);
+    bw_status_t status = kernel_event_wait(&g_event, EVENT_OK | EVENT_NACK | EVENT_ERR, &event_bit, true, false, 1000);
+    i2c_bus_unlock(g_i2c_h.perip);
 
     if (status == STATUS_TIMEOUT || (event_bit & (EVENT_NACK | EVENT_ERR)))
     {
@@ -59,12 +59,12 @@ static bw_status_t recieve_data(uint8_t len)
 {
     g_i2c_h.len = len;
 
-    hal_i2c_bus_lock(g_i2c_h.perip);
-    hal_i2c_receive(&g_i2c_h);
+    i2c_bus_lock(g_i2c_h.perip);
+    i2c_receive(&g_i2c_h);
 
     uint32_t event_bit;
-    bw_status_t status = rtos_event_wait(&g_event, EVENT_OK | EVENT_NACK | EVENT_ERR, &event_bit, true, false, 1000);
-    hal_i2c_bus_unlock(g_i2c_h.perip);
+    bw_status_t status = kernel_event_wait(&g_event, EVENT_OK | EVENT_NACK | EVENT_ERR, &event_bit, true, false, 1000);
+    i2c_bus_unlock(g_i2c_h.perip);
 
     if (status == STATUS_TIMEOUT || (event_bit & (EVENT_NACK | EVENT_ERR)))
     {
@@ -77,10 +77,10 @@ static bw_status_t recieve_data(uint8_t len)
 
 void hygro_init()
 {
-    rtos_event_init(&g_event);
+    kernel_event_init(&g_event);
 
     // tPU timeout to enter idle state
-    rtos_task_delay(1);
+    kernel_task_delay(1);
 
     // Initialize i2c handle
     g_i2c_h.addr = HYGRO_ADDR;
@@ -125,7 +125,7 @@ bw_status_t hygro_read(hygro_repeatability_t repeatability, uint16_t *rhx100, in
     {
         return status;
     }
-    rtos_task_delay(delay);
+    kernel_task_delay(delay);
     status = recieve_data(5);
     if (status != STATUS_OK)
     {

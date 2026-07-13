@@ -1,8 +1,8 @@
-#include "display/display.h"
+#include "drivers/display/display.h"
+#include "lib/assert.h"
+#include "lib/containers/clist.h"
 #include "ui.h"
-#include "ui/widget.h"
-#include "utils/assert.h"
-#include "utils/containers/clist.h"
+#include "widget.h"
 #include <stddef.h>
 
 static ui_widget_t *g_root_widget;

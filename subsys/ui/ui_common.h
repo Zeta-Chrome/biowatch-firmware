@@ -1,7 +1,7 @@
 #ifndef UI_COMMON_H
 #define UI_COMMON_H
 
-#include "utils/utils.h"
+#include "lib/utils.h"
 #include <stdint.h>
 
 #define MAX_FONT_CHARS 224

@@ -2,12 +2,13 @@
 #define DRIVER_OXIM_REGS_H
 
 // Interrupt registers
+#include "lib/utils.h"
 #include <stdint.h>
 
 #define OXIM_INT_ST1 0x0
 #define OXIM_INT_ST1_PWR_RDY BIT(0)
 #define OXIM_INT_ST1_ALC_OVF BIT(5)
-#define OXIM_INT_ST1_PPG_RDY BIT(6) 
+#define OXIM_INT_ST1_PPG_RDY BIT(6)
 #define OXIM_INT_ST1_A_FULL BIT(7)
 
 #define OXIM_INT_ST2 0x01
@@ -15,7 +16,7 @@
 
 #define OXIM_INT_EN1 0x02
 #define OXIM_INT_EN1_ALC_OVF BIT(5)
-#define OXIM_INT_EN1_PPG_RDY BIT(6) 
+#define OXIM_INT_EN1_PPG_RDY BIT(6)
 #define OXIM_INT_EN1_A_FULL BIT(7)
 
 #define OXIM_INT_EN2 0x03

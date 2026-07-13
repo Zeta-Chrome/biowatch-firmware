@@ -1,7 +1,7 @@
 #ifndef DRIVER_IMU_REGS_H
 #define DRIVER_IMU_REGS_H
 
-#include "utils/utils.h"
+#include "lib/utils.h"
 
 #define IMU_WRITE 0x00
 #define IMU_READ 0x80
@@ -13,7 +13,9 @@
 #define IMU_ERR_FATAL_Msk BIT(0)
 
 #define IMU_PMU_ST 0x03
+#define IMU_PMU_ST_ACC_Msk BIT(4)
 #define IMU_PMU_ST_ACC_Pos 4
+#define IMU_PMU_ST_GYR_Msk BIT(2)
 #define IMU_PMU_ST_GYR_Pos 2
 
 #define IMU_GYR_DATA 0x0C // 6 bytes
@@ -22,8 +24,11 @@
 #define IMU_SENSORTIME 0x18 // 3 bytes
 
 #define IMU_ST 0x1B
+#define IMU_ST_DRDY_ACC_Msk BIT(7)
 #define IMU_ST_DRDY_ACC_Pos 7
+#define IMU_ST_DRDY_GYR_Msk BIT(6)
 #define IMU_ST_DRDY_GYR_Pos 6
+#define IMU_ST_NVM_RDY_Msk BIT(4)
 #define IMU_ST_NVM_RDY_Pos 4
 
 #define IMU_INT_ST0 0x1C
@@ -37,6 +42,7 @@
 
 #define IMU_INT_ST1 0x1D
 #define IMU_INT_ST1_NOMO_Msk BIT(7)
+#define IMU_INT_ST1_FWM_Msk BIT(6)
 #define IMU_INT_ST1_FFULL_Msk BIT(5)
 #define IMU_INT_ST1_DRDY_Msk BIT(4)
 
@@ -56,12 +62,14 @@
 #define IMU_GYR_CONF_ODR_Pos 0
 
 #define IMU_GYR_RANGE 0x43
+#define IMU_GYR_RANGE_Pos 0
 
-#define IMU_FIFO_FWM 0x46
+#define IMU_FIFO_CONF_WM 0x46
+#define IMU_FIFO_CONF_WM_Pos 0
 
-#define IMU_FIFO_CONF 0x47
-#define IMU_FIFO_CONF_ACC_EN_Pos 7
-#define IMU_FIFO_CONF_GYR_EN_Pos 6
+#define IMU_FIFO_CONF_EN 0x47
+#define IMU_FIFO_CONF_ACC_EN_Msk BIT(7)
+#define IMU_FIFO_CONF_GYR_EN_Msk BIT(6)
 
 #define IMU_INT_EN0 0x50
 #define IMU_INT_EN0_FLAT_Msk BIT(7)
@@ -83,13 +91,13 @@
 #define IMU_INT_EN2_NOMOZ_Msk BIT(0)
 
 #define IMU_INT_OUT 0x53
-#define IMU_INT2_OUT_EN_Msk BIT(7) 
-#define IMU_INT2_OD_Pos 6 
-#define IMU_INT2_LVL_Pos 5 
-#define IMU_INT2_EDGE_Pos 4 
-#define IMU_INT1_OUT_EN_Msk BIT(3) 
+#define IMU_INT2_OUT_EN_Msk BIT(7)
+#define IMU_INT2_OD_Pos 6
+#define IMU_INT2_LVL_Pos 5
+#define IMU_INT2_EDGE_Pos 4
+#define IMU_INT1_OUT_EN_Msk BIT(3)
 #define IMU_INT1_OD_Pos 2
-#define IMU_INT1_LVL_Pos 1 
+#define IMU_INT1_LVL_Pos 1
 #define IMU_INT1_EDGE_Pos 0
 
 #define IMU_INT1_MAP0 0x55
@@ -101,11 +109,11 @@
 #define IMU_INT1_MAP0_ANYMO_Msk BIT(2)
 
 #define IMU_INT1_MAP1 0x56
-#define IMU_INT1_MAP1_DRDY_Msk BIT(3)
-#define IMU_INT1_MAP1_FWM_Msk BIT(2)
-#define IMU_INT1_MAP1_FFULL_Msk BIT(1)
+#define IMU_INT1_MAP1_DRDY_Msk BIT(7)
+#define IMU_INT1_MAP1_FWM_Msk BIT(6)
+#define IMU_INT1_MAP1_FFULL_Msk BIT(5)
 
-#define IMU_INT2_MAP2 0x55
+#define IMU_INT2_MAP2 0x57
 #define IMU_INT2_MAP2_FLAT_Msk BIT(7)
 #define IMU_INT2_MAP2_ORIENT_Msk BIT(6)
 #define IMU_INT2_MAP2_STAP_Msk BIT(5)
@@ -123,10 +131,10 @@
 #define IMU_INT_MO3_PROOF_Pos 4
 #define IMU_INT_MO3_SKIP_Pos 2
 #define IMU_INT_MO3_ANYMO_SEL_Msk BIT(1)
-#define IMU_INT_MO3_NOMO_SEL_Msk BIT(0) 
+#define IMU_INT_MO3_NOMO_SEL_Msk BIT(0)
 
-#define IMU_INT_TAP 0x63 
-#define IMU_INT_TAP_QUITE_Pos 7 
+#define IMU_INT_TAP 0x63
+#define IMU_INT_TAP_QUITE_Pos 7
 #define IMU_INT_TAP_SHOCK_Pos 6
 #define IMU_INT_TAP_DUR_Pos 0
 #define IMU_INT_TAP_TH_Pos 0

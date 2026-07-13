@@ -1,6 +1,7 @@
 #ifndef DRIVER_HYGRO_REGS_H
 #define DRIVER_HYGRO_REGS_H
-#include "utils/utils.h"
+
+#include "lib/utils.h"
 
 #define HYGRO_REPEATABILITY_HIGH_TMS 15
 #define HYGRO_REPEATABILITY_MEDIUM_TMS 6

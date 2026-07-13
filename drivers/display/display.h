@@ -1,7 +1,7 @@
 #ifndef DRIVER_DISPLAY_H
 #define DRIVER_DISPLAY_H
 
-#include "hal/i2c/i2c.h"
+#include "drivers/i2c/i2c.h"
 #include <stdbool.h>
 #include <stdint.h>
 

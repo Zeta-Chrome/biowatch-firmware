@@ -1,19 +1,19 @@
 #ifndef BSP_PINS_H
 #define BSP_PINS_H
 
-#include "core/hal/gpio/gpio_types.h"
+#include "drivers/gpio/gpio_types.h"
 
 // Port A pins
-static const gpio_t PA0 =  {.port = GPIOA, .pin = 0};
-static const gpio_t PA1 =  {.port = GPIOA, .pin = 1};
-static const gpio_t PA2 =  {.port = GPIOA, .pin = 2};
-static const gpio_t PA3 =  {.port = GPIOA, .pin = 3};
-static const gpio_t PA4 =  {.port = GPIOA, .pin = 4};
-static const gpio_t PA5 =  {.port = GPIOA, .pin = 5};
-static const gpio_t PA6 =  {.port = GPIOA, .pin = 6};
-static const gpio_t PA7 =  {.port = GPIOA, .pin = 7};
-static const gpio_t PA8 =  {.port = GPIOA, .pin = 8};
-static const gpio_t PA9 =  {.port = GPIOA, .pin = 9};
+static const gpio_t PA0 = {.port = GPIOA, .pin = 0};
+static const gpio_t PA1 = {.port = GPIOA, .pin = 1};
+static const gpio_t PA2 = {.port = GPIOA, .pin = 2};
+static const gpio_t PA3 = {.port = GPIOA, .pin = 3};
+static const gpio_t PA4 = {.port = GPIOA, .pin = 4};
+static const gpio_t PA5 = {.port = GPIOA, .pin = 5};
+static const gpio_t PA6 = {.port = GPIOA, .pin = 6};
+static const gpio_t PA7 = {.port = GPIOA, .pin = 7};
+static const gpio_t PA8 = {.port = GPIOA, .pin = 8};
+static const gpio_t PA9 = {.port = GPIOA, .pin = 9};
 static const gpio_t PA10 = {.port = GPIOA, .pin = 10};
 static const gpio_t PA15 = {.port = GPIOA, .pin = 15};
 
