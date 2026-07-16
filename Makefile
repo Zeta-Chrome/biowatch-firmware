@@ -102,9 +102,7 @@ BLE_STACK_ADDR := 0x080D0000
 # Rules
 .PHONY: all flash flash_ble flash_all monitor server debug erase clean compiledb check_core
 
-all: $(BUILD_DIR)/$(TARGET).elf \
-     $(BUILD_DIR)/$(TARGET).hex \
-     $(BUILD_DIR)/$(TARGET).bin
+all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin
 	@echo ""
 	@echo "✓ Build complete!"
 	@$(SZ) $(BUILD_DIR)/$(TARGET).elf
@@ -117,7 +115,7 @@ $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf | $(BUILD_DIR)
 
 $(BUILD_DIR)/$(TARGET).elf: $(OBJS) $(LDSCRIPT) Makefile | $(BUILD_DIR)
 	@echo "  LD    $@"
-	@$(CC) $(OBJECTS) $(CORE_LIBS) $(LDFLAGS) -o $@
+	@$(CC) $(OBJS) $(CORE_LIBS) $(LDFLAGS) -o $@
 
 $(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
@@ -127,7 +125,7 @@ $(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: %.s Makefile | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	@echo "  AS    $<"
-	@$(AS) -c $(MCU) $(OPT) $(DBGFLAGS) $< -o $@
+	@$(AS) -c $(MCU) $(OPT) $(DBGFLAGS) -MMD -MP -MF"$(@:.o=.d)" $< -o $@
 
 $(BUILD_DIR):
 	@mkdir -p $@
@@ -249,4 +247,4 @@ check_core:
 	@echo "core compiles standalone — no leaked app dependency."
 	@rm -rf $(CHECK_DIR)
 
--include $(wildcard $(BUILD_DIR)/**/*.d)
+-include $(shell find $(BUILD_DIR) -name '*.d' 2>/dev/null)
