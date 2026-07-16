@@ -30,6 +30,8 @@
 #define IMU_ST_DRDY_GYR_Pos 6
 #define IMU_ST_NVM_RDY_Msk BIT(4)
 #define IMU_ST_NVM_RDY_Pos 4
+#define IMU_ST_FOC_RDY_Msk BIT(3)
+#define IMU_ST_FOC_RDY_Pos 3
 
 #define IMU_INT_ST0 0x1C
 #define IMU_INT_ST0_FLAT_Msk BIT(7)
@@ -139,12 +141,29 @@
 #define IMU_INT_TAP_DUR_Pos 0
 #define IMU_INT_TAP_TH_Pos 0
 
+#define IMU_FOC_CONF 0x69
+#define IMU_FOC_CONF_GYR_EN_Msk BIT(6)
+#define IMU_FOC_CONF_ACC_X_Pos 4
+#define IMU_FOC_CONF_ACC_Y_Pos 2
+#define IMU_FOC_CONF_ACC_Z_Pos 0
+
+#define IMU_OFFSET 0x71
+
+#define IMU_OFFSET_CONF 0x77
+#define IMU_OFFSET_CONF_GYR_EN_Msk BIT(7)
+#define IMU_OFFSET_CONF_ACC_EN_Msk BIT(6)
+#define IMU_OFFSET_GYR_Z_Pos 4
+#define IMU_OFFSET_GYR_Y_Pos 2
+#define IMU_OFFSET_GYR_X_Pos 0
+
 #define IMU_STEP_CNT 0x78 // 2 bytes
 
 #define IMU_STEP_CONF 0x7A
 #define IMU_STEP_CNT_EN_Msk BIT(3)
 
 #define IMU_CMD 0x7E
+#define IMU_CMD_START_FOC 0x03
+#define IMU_CMD_PROG_NVM 0xA0
 #define IMU_CMD_INT_RST 0xB1
 #define IMU_CMD_SOFTRST 0xB6
 #define IMU_CMD_ACC_SUSPEND 0x10

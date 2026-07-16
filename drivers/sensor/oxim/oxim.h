@@ -11,15 +11,6 @@
 
 typedef enum
 {
-    OXIM_STATE_UNINTILAIZED,
-    OXIM_STATE_I2C_ERR,
-    OXIM_STATE_POR,
-    OXIM_STATE_ALC_OVF,
-    OXIM_STATE_READY
-} oxim_state_t;
-
-typedef enum
-{
     OXIM_MODE_HR = 0x2,
     OXIM_MODE_SPO2 = 0x3,
 } oxim_mode_t;
@@ -55,6 +46,5 @@ bw_status_t oxim_read_temp(int *temp_milli_c);
 bw_status_t oxim_start_mode(oxim_mode_t mode);
 bw_status_t oxim_read_sample(uint32_t *red_sample, uint32_t *ir_sample);
 bw_status_t oxim_shutdown();
-oxim_state_t oxim_get_state();
 
 #endif

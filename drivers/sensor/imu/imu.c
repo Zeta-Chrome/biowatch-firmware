@@ -197,6 +197,16 @@ static bw_status_t imu_configure(imu_odr_t odr, imu_step_mode_t st_mode, imu_nom
         return status;
     }
 
+    // Enable Offset Compensation
+    g_tx_buf[0] = IMU_WRITE | IMU_OFFSET_CONF;
+    g_tx_buf[1] = IMU_OFFSET_CONF_ACC_EN_Msk | IMU_OFFSET_CONF_GYR_EN_Msk;
+    status = transact_and_wait(2);
+    if (status != STATUS_OK)
+    {
+        BW_LOG("Failed to enable offset compensation\n");
+        return status;
+    }
+
     return STATUS_OK;
 }
 
@@ -243,6 +253,117 @@ bw_status_t imu_init(imu_odr_t odr, imu_step_mode_t st_mode, imu_nomo_t nomo_mod
     return STATUS_OK;
 }
 
+bw_status_t imu_start_foc()
+{
+    bw_status_t status;
+
+    // Accelerometer to normal
+    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+    g_tx_buf[1] = IMU_CMD_ACC_NORMAL;
+    status = transact_and_wait(2);
+    if (status != STATUS_OK)
+    {
+        BW_LOG("Failed to turn on accelerometer\n");
+        return status;
+    }
+
+    // Gyroscope to normal
+    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+    g_tx_buf[1] = IMU_CMD_GYR_NORMAL;
+    status = transact_and_wait(2);
+    if (status != STATUS_OK)
+    {
+        BW_LOG("Failed to turn on gyroscope\n");
+        return status;
+    }
+    kernel_task_delay(100);
+
+    // Enable FOC
+    g_tx_buf[0] = IMU_WRITE | IMU_FOC_CONF;
+    g_tx_buf[1] = IMU_FOC_CONF_GYR_EN_Msk | 0x0 << IMU_FOC_CONF_ACC_X_Pos | 0x0 << IMU_FOC_CONF_ACC_Y_Pos
+                  | 0x2 << IMU_FOC_CONF_ACC_Z_Pos; // (0g , 0g, -1g)
+    status = transact_and_wait(2);
+    if (status != STATUS_OK)
+    {
+        BW_LOG("Failed to configure FOC\n");
+        return status;
+    }
+
+    // Start FOC
+    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+    g_tx_buf[1] = IMU_CMD_START_FOC;
+    status = transact_and_wait(2);
+    if (status != STATUS_OK)
+    {
+        BW_LOG("Failed to start FOC\n");
+        return status;
+    }
+
+    // Wait till foc_rdy is set
+    g_rx_buf[1] = 0;
+    while (!(g_rx_buf[1] & IMU_ST_FOC_RDY_Msk))
+    {
+        g_tx_buf[0] = IMU_READ | IMU_ST;
+        g_tx_buf[1] = 0;
+        status = transact_and_wait(2);
+        if (status != STATUS_OK)
+        {
+            BW_LOG("Failed to read status register\n");
+            return STATUS_ERR;
+        }
+    }
+
+    // Prog NVM
+    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+    g_tx_buf[1] = IMU_CMD_PROG_NVM;
+    status = transact_and_wait(2);
+    if (status != STATUS_OK)
+    {
+        BW_LOG("Failed to program NVM\n");
+        return status;
+    }
+
+    // Wait till nvm_rdy is set
+    g_rx_buf[1] = 0;
+    while (!(g_rx_buf[1] & IMU_ST_NVM_RDY_Msk))
+    {
+        g_tx_buf[0] = IMU_READ | IMU_ST;
+        g_tx_buf[1] = 0;
+        status = transact_and_wait(2);
+        if (status != STATUS_OK)
+        {
+            BW_LOG("Failed to read status register\n");
+            return STATUS_ERR;
+        }
+    }
+
+    g_tx_buf[0] = IMU_READ | IMU_OFFSET;
+    g_tx_buf[1] = 0;
+    status = transact_and_wait(8);
+    if (status != STATUS_OK)
+    {
+        BW_LOG("Failed to read offset register\n");
+        return STATUS_ERR;
+    }
+
+    int8_t acc_x = (int8_t)g_rx_buf[1];
+    int8_t acc_y = (int8_t)g_rx_buf[2];
+    int8_t acc_z = (int8_t)g_rx_buf[3];
+
+    uint16_t raw_gyr_x = (((uint16_t)g_rx_buf[7] & 0x03) << (8 - IMU_OFFSET_GYR_X_Pos)) | g_rx_buf[4];
+    uint16_t raw_gyr_y = (((uint16_t)g_rx_buf[7] & 0x0C) << (8 - IMU_OFFSET_GYR_Y_Pos)) | g_rx_buf[5];
+    uint16_t raw_gyr_z = (((uint16_t)g_rx_buf[7] & 0x30) << (8 - IMU_OFFSET_GYR_Z_Pos)) | g_rx_buf[6];
+
+    // Sign extension
+    int16_t gyr_x = (raw_gyr_x & 0x0200) ? (int16_t)(raw_gyr_x | 0xFC00) : (int16_t)raw_gyr_x;
+    int16_t gyr_y = (raw_gyr_y & 0x0200) ? (int16_t)(raw_gyr_y | 0xFC00) : (int16_t)raw_gyr_y;
+    int16_t gyr_z = (raw_gyr_z & 0x0200) ? (int16_t)(raw_gyr_z | 0xFC00) : (int16_t)raw_gyr_z;
+
+    BW_LOG("FOC: ACC : (%d, %d, %d), GYR: (%d, %d, %d)]\n", acc_x, acc_y, acc_z, gyr_x, gyr_y, gyr_z);
+
+    return STATUS_OK;
+}
+
 bw_status_t imu_read_error()
 {
     g_tx_buf[0] = IMU_READ | IMU_ERR;
@@ -260,14 +381,12 @@ bw_status_t imu_read_error()
     return STATUS_OK;
 }
 
-bw_status_t imu_read_int_status(uint8_t int_status[4])
+bw_status_t imu_read_int_status(uint8_t int_status[2])
 {
     g_tx_buf[0] = IMU_READ | IMU_INT_ST0;
     g_tx_buf[1] = 0;
     g_tx_buf[2] = 0;
-    g_tx_buf[3] = 0;
-    g_tx_buf[4] = 0;
-    bw_status_t status = transact_and_wait(5);
+    bw_status_t status = transact_and_wait(3);
     if (status != STATUS_OK)
     {
         BW_LOG("Failed to read interrupt status\n");
@@ -276,8 +395,6 @@ bw_status_t imu_read_int_status(uint8_t int_status[4])
 
     int_status[0] = g_rx_buf[1];
     int_status[1] = g_rx_buf[2];
-    int_status[2] = g_rx_buf[3];
-    int_status[3] = g_rx_buf[4];
 
     g_tx_buf[0] = IMU_WRITE | IMU_CMD;
     g_tx_buf[1] = IMU_CMD_INT_RST;
@@ -304,6 +421,20 @@ bw_status_t imu_read_step_cnt(uint16_t *step_cnt)
     }
 
     *step_cnt = *(uint16_t *)(&g_rx_buf[1]);
+    return STATUS_OK;
+}
+
+bw_status_t imu_clear_step_cnt()
+{
+    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+    g_tx_buf[1] = IMU_CMD_STEP_CNT_CLR;
+    bw_status_t status = transact_and_wait(2);
+    if (status != STATUS_OK)
+    {
+        BW_LOG("Failed to clear step count\n");
+        return status;
+    }
+
     return STATUS_OK;
 }
 
@@ -351,7 +482,7 @@ bw_status_t imu_start_stream(bool gyro_en)
         {
             BW_LOG("Failed to turn on gyroscope\n");
             kernel_mutex_unlock(&g_mutex);
-            return STATUS_ERR;
+            return status;
         }
         g_gyro_en = true;
         kernel_task_delay(80);
@@ -379,17 +510,8 @@ bw_status_t imu_read_sample(imu_acc_sample_t *acc_sample, imu_gyr_sample_t *gyr_
     kernel_mutex_lock(&g_mutex, MAX_TIMEOUT);
 
     memset(g_tx_buf + 1, 0, 12);
-
-    if (g_gyro_en && gyr_sample)
-    {
-        g_tx_buf[0] = IMU_READ | IMU_GYR_DATA;
-        status = transact_and_wait(13);
-    }
-    else
-    {
-        g_tx_buf[0] = IMU_READ | IMU_ACC_DATA;
-        status = transact_and_wait(7);
-    }
+    g_tx_buf[0] = IMU_READ | IMU_GYR_DATA;
+    status = transact_and_wait(13);
     if (status != STATUS_OK)
     {
         BW_LOG("Failed to read data\n");

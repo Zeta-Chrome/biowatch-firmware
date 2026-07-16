@@ -57,9 +57,11 @@ typedef void (*imu_callback_t)();
 
 bw_status_t imu_init(imu_odr_t odr, imu_step_mode_t st_mode, imu_nomo_t nomo_mode, uint16_t nomo_dur_s,
                      imu_callback_t callback);
+bw_status_t imu_start_foc();
 bw_status_t imu_read_error();
-bw_status_t imu_read_int_status(uint8_t int_status[4]);
+bw_status_t imu_read_int_status(uint8_t int_status[2]);
 bw_status_t imu_read_step_cnt(uint16_t *step_cnt);
+bw_status_t imu_clear_step_cnt();
 bw_status_t imu_enable_nomo_int();
 bw_status_t imu_disable_nomo_int();
 bw_status_t imu_start_stream(bool gyro_en);

@@ -28,7 +28,6 @@ typedef struct
 static event_t g_event;
 static exti_handle_t g_exti_h;
 static i2c_handle_t g_i2c_h;
-static oxim_state_t g_state = OXIM_STATE_UNINTILAIZED;
 static uint8_t g_tx_buf[12];
 static uint8_t g_rx_buf[8];
 static oxim_conf_t g_conf;
@@ -78,7 +77,6 @@ static bw_status_t transmit_and_wait(uint8_t *buf, uint8_t len, bool repeat, uin
     if (status == STATUS_TIMEOUT || (event_bit & (EVENT_NACK | EVENT_ERR)))
     {
         BW_LOG("I2C Write Fail: %s\n", (status == STATUS_TIMEOUT) ? "TIMEOUT" : (event_bit & EVENT_NACK) ? "NACK" : "ERR");
-        g_state = OXIM_STATE_I2C_ERR;
         i2c_bus_reset(&g_i2c_h);
         return STATUS_ERR;
     }
@@ -95,8 +93,6 @@ static void read_int_status()
 
 bw_status_t oxim_init(oxim_smp_avg_t smp_avg, oxim_smp_rate_t smp_rate, oxim_callback_t callback)
 {
-    g_state = OXIM_STATE_UNINTILAIZED;
-
     g_conf.callback = callback;
     g_conf.smp_avg = smp_avg;
     g_conf.smp_rate = smp_rate;
@@ -120,7 +116,7 @@ bw_status_t oxim_init(oxim_smp_avg_t smp_avg, oxim_smp_rate_t smp_rate, oxim_cal
             status = kernel_event_wait(&g_event, EVENT_INT, NULL, true, true, 2000);
             if (status != STATUS_OK)
             {
-                BW_LOG("Oximeter never powered on\n");
+                BW_LOG("Never powered on\n");
                 return status;
             }
         }
@@ -131,7 +127,7 @@ bw_status_t oxim_init(oxim_smp_avg_t smp_avg, oxim_smp_rate_t smp_rate, oxim_cal
     status = transmit_and_wait(g_tx_buf, 2, false, 100, NULL);
     if (status == STATUS_ERR)
     {
-        BW_LOG("Oximeter failed to reset!\n");
+        BW_LOG("Failed to reset!\n");
         return status;
     }
 
@@ -142,7 +138,6 @@ bw_status_t oxim_init(oxim_smp_avg_t smp_avg, oxim_smp_rate_t smp_rate, oxim_cal
         return status;
     }
 
-    g_state = OXIM_STATE_READY;
     return STATUS_OK;
 }
 
@@ -154,7 +149,7 @@ bw_status_t oxim_reconfigure()
     bw_status_t status = transmit_and_wait(g_tx_buf, 3, false, 100, NULL);
     if (status != STATUS_OK)
     {
-        BW_LOG("Oximeter failed to enable interrupts\n");
+        BW_LOG("Failed to enable interrupts\n");
         return status;
     }
 
@@ -167,7 +162,7 @@ bw_status_t oxim_reconfigure()
     status = transmit_and_wait(g_tx_buf, 4, false, 100, NULL);
     if (status != STATUS_OK)
     {
-        BW_LOG("Oximeter failed to write fifo and mode configuration\n");
+        BW_LOG("Failed to write fifo and mode configuration\n");
         return status;
     }
 
@@ -178,7 +173,7 @@ bw_status_t oxim_reconfigure()
     status = transmit_and_wait(g_tx_buf, 3, false, 100, NULL);
     if (status != STATUS_OK)
     {
-        BW_LOG("Oximeter failed to set LED currents\n");
+        BW_LOG("Failed to set LED currents\n");
         return status;
     }
 
@@ -219,7 +214,7 @@ bw_status_t oxim_read_int_status(uint8_t int_status[2])
     bw_status_t status = transmit_and_wait(g_tx_buf, 1, true, 100, read_int_status);
     if (status != STATUS_OK)
     {
-        BW_LOG("Oximeter interrupt status read failed \n");
+        BW_LOG("Interrupt status read failed \n");
         return status;
     }
 
@@ -236,7 +231,7 @@ bw_status_t oxim_start_temp_conversion()
     bw_status_t status = transmit_and_wait(g_tx_buf, 2, false, 100, read_temp_regs);
     if (status != STATUS_OK)
     {
-        BW_LOG("Oximeter failed to set temperature enable\n");
+        BW_LOG("Failed to set temperature enable\n");
         return status;
     }
 
@@ -263,12 +258,24 @@ bw_status_t oxim_start_mode(oxim_mode_t mode)
 {
     g_conf.sample_size = mode == OXIM_MODE_SPO2 ? 6 : 3;
 
-    g_tx_buf[0] = OXIM_MODE_CONF;
-    g_tx_buf[1] = mode << OXIM_MODE_CONF_MODE_Pos;
-    bw_status_t status = transmit_and_wait(g_tx_buf, 2, false, 100, NULL);
+    // Clear WR, OVR and RD to 0
+    g_tx_buf[0] = OXIM_FIFO_WR_PTR;
+    g_tx_buf[1] = 0;
+    g_tx_buf[2] = 0;
+    g_tx_buf[3] = 0;
+    bw_status_t status = transmit_and_wait(g_tx_buf, 4, false, 100, NULL);
     if (status != STATUS_OK)
     {
-        BW_LOG("Oximeter failed to configure mode\n");
+        BW_LOG("Failed to reset pointers\n");
+        return status;
+    }
+
+    g_tx_buf[0] = OXIM_MODE_CONF;
+    g_tx_buf[1] = mode << OXIM_MODE_CONF_MODE_Pos;
+    status = transmit_and_wait(g_tx_buf, 2, false, 100, NULL);
+    if (status != STATUS_OK)
+    {
+        BW_LOG("Failed to configure mode\n");
         return status;
     }
 
@@ -281,18 +288,18 @@ bw_status_t oxim_read_sample(uint32_t *red_sample, uint32_t *ir_sample)
     bw_status_t status = transmit_and_wait(g_tx_buf, 1, true, 100, read_fifo);
     if (status != STATUS_OK)
     {
-        BW_LOG("Oximeter failed to read fifo\n");
+        BW_LOG("Failed to read fifo\n");
         return status;
     }
 
     if (red_sample)
     {
-        *red_sample = (g_rx_buf[0] << 16) | (g_rx_buf[1] << 8) | g_rx_buf[2];
+        *red_sample = 0x3FFFF & (((uint32_t)g_rx_buf[0] << 16) | ((uint32_t)g_rx_buf[1] << 8) | (uint32_t)g_rx_buf[2]);
     }
 
     if (ir_sample)
     {
-        *ir_sample = (g_rx_buf[3] << 16) | (g_rx_buf[4] << 8) | g_rx_buf[5];
+        *ir_sample = 0x3FFFF & (((uint32_t)g_rx_buf[3] << 16) | ((uint32_t)g_rx_buf[4] << 8) | (uint32_t)g_rx_buf[5]);
     }
 
     return STATUS_OK;
@@ -305,14 +312,9 @@ bw_status_t oxim_shutdown()
     bw_status_t status = transmit_and_wait(g_tx_buf, 2, false, 100, NULL);
     if (status == STATUS_ERR)
     {
-        BW_LOG("Oximeter failed to shutdown\n");
+        BW_LOG("Failed to shutdown\n");
         return status;
     }
 
     return STATUS_OK;
-}
-
-oxim_state_t oxim_get_state()
-{
-    return g_state;
 }
