@@ -3,6 +3,6 @@
 
 #include "assets/fonts/font.h"
 
-extern const font_t tamzen12b;
+extern const struct font tamzen12b;
 
 #endif

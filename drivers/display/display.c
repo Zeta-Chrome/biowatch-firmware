@@ -17,7 +17,7 @@
 #define EVENT_CMD_FLUSH_FAILURE BIT(5)
 
 // clang-format off
-static display_fb_t g_fb = {
+static struct display_fb g_fb = {
 .buf = {
 DISPLAY_CTRL_CMD_ONLY,      
 DISPLAY_CMD_DISPLAY_OFF, 
@@ -40,34 +40,32 @@ DISPLAY_CMD_DISPLAY_ON
 .cmd_len = 26, // 26 Init commands
 .num_pages = 0
 };
-// clang-format off
-static event_t g_event;
-static i2c_handle_t g_i2c_h;
-static display_cmd_buf_t g_cmd_queue_buf[DISPLAY_CMD_RING_SZ]; 
+// clang-format on
+
+static struct event g_event;
+static struct i2c_handle g_i2c_h;
+static struct display_cmd_buf g_cmd_queue_buf[DISPLAY_CMD_RING_SZ];
 static queue_t g_cmd_queue;
 static uint8_t g_retry_counter = 0;
 static uint8_t g_flush_pending = false;
-static display_state_t g_state = DISPLAY_STATE_UNINITIALIZED;
+static enum display_state g_state = DISPLAY_STATE_UNINITIALIZED;
 
-static void on_initialized(bw_status_t status, void* user_data)
+static void on_initialized(enum bw_status status, void *user_data)
 {
-    (void)user_data;
-    if (status != STATUS_OK)
-    {
-        kernel_event_set_from_isr(&g_event, EVENT_INIT_FAILURE);  
-    }
-    else 
-    {
-        kernel_event_set_from_isr(&g_event, EVENT_INIT_SUCCESS); 
-    }
+	(void)user_data;
+
+	if (status != STATUS_OK)
+		kernel_event_set_from_isr(&g_event, EVENT_INIT_FAILURE);
+	else
+		kernel_event_set_from_isr(&g_event, EVENT_INIT_SUCCESS);
 }
 
 static void init_fb_cmds()
 {
-    // Initialize fb commands
-    g_fb.cmd_len = 0;
+	// Initialize fb commands
+	g_fb.cmd_len = 0;
 
-    // clang-format off
+	// clang-format off
     g_fb.buf[g_fb.cmd_len++] = DISPLAY_CTRL_CMD; g_fb.buf[g_fb.cmd_len++] = DISPLAY_CMD_SET_COL_ADDR;
     g_fb.buf[g_fb.cmd_len++] = DISPLAY_CTRL_CMD; g_fb.buf[g_fb.cmd_len++] = 0;
     g_fb.buf[g_fb.cmd_len++] = DISPLAY_CTRL_CMD; g_fb.buf[g_fb.cmd_len++] = 127;
@@ -80,6 +78,8 @@ static void init_fb_cmds()
 
 void display_init(bool invert_x, bool invert_y)
 {
+    enum bw_status status;
+
     g_state = DISPLAY_STATE_UNINITIALIZED;
     
     queue_init(&g_cmd_queue, g_cmd_queue_buf, sizeof(g_cmd_queue_buf[0]), DISPLAY_CMD_RING_SZ);
@@ -88,7 +88,7 @@ void display_init(bool invert_x, bool invert_y)
     g_fb.buf[9] = invert_x ? DISPLAY_CMD_SEG_REMAP_START_127 : DISPLAY_CMD_SEG_REMAP_START_0;
     g_fb.buf[10] = invert_y ? DISPLAY_CMD_SCAN_DIR_REMAPPED : DISPLAY_CMD_SCAN_DIR_NORMAL;
     
-    while (g_state != DISPLAY_STATE_READY)
+    while (g_state == DISPLAY_STATE_UNINITIALIZED)
     {
         // DISPLAY initialization
         g_i2c_h.addr = DISPLAY_ADDR;
@@ -97,21 +97,21 @@ void display_init(bool invert_x, bool invert_y)
         g_i2c_h.callback = on_initialized;
         i2c_transmit_dma(&g_i2c_h); 
     
-        uint32_t event_bit;
-        bw_status_t status = kernel_event_wait(&g_event, EVENT_INIT_SUCCESS | EVENT_INIT_FAILURE, &event_bit, true, false, 1000);
+        uint32_t evt;
+        status = kernel_event_wait(&g_event, EVENT_INIT_SUCCESS | EVENT_INIT_FAILURE, &evt, true, false, 1000);
         if (status != STATUS_OK)
         {
             BW_LOG("Display exited with status: %d\n", status);
-            event_bit = EVENT_INIT_FAILURE;
+            evt = EVENT_INIT_FAILURE;
         }
 
-        if (event_bit & EVENT_INIT_SUCCESS)
+        if (evt & EVENT_INIT_SUCCESS)
         {
             g_state = DISPLAY_STATE_READY;
             g_retry_counter = 0;
             init_fb_cmds();
         }
-        else if (event_bit & EVENT_INIT_FAILURE)
+        else if (evt & EVENT_INIT_FAILURE)
         {
             if (g_retry_counter++ < MAX_RETRY_COUNTER)
             {
@@ -123,50 +123,43 @@ void display_init(bool invert_x, bool invert_y)
     }
 }
 
-display_state_t display_get_state()
+ enum display_state display_get_state()
 {
     return g_state;
 }
 
-i2c_handle_t *display_get_i2c_handle()
+ struct i2c_handle *display_get_i2c_handle()
 {
     return &g_i2c_h;
 }
 
-static void on_cmd_flushed(bw_status_t status, void *user_data)
+static void on_cmd_flushed( enum bw_status status, void *user_data)
 {
     (void)user_data;
-    if (status != STATUS_OK)
-    {
+    
+    if (status != STATUS_OK) 
         kernel_event_set_from_isr(&g_event, EVENT_CMD_FLUSH_FAILURE); 
-    }
     else
-    {
-        kernel_event_set_from_isr(&g_event, EVENT_CMD_FLUSH_SUCCESS); 
-    } 
+        kernel_event_set_from_isr(&g_event, EVENT_CMD_FLUSH_SUCCESS);  
 }
 
-static void on_fb_flushed(bw_status_t status, void* user_data)
+static void on_fb_flushed( enum bw_status status, void* user_data)
 {
     (void)user_data;
+
     if (status != STATUS_OK)
-    {
         kernel_event_set_from_isr(&g_event, EVENT_FLUSH_FAILURE); 
-    }
     else
-    {
-        kernel_event_set_from_isr(&g_event, EVENT_FLUSH_SUCCESS); 
-    }
+        kernel_event_set_from_isr(&g_event, EVENT_FLUSH_SUCCESS);
 }
 
 static void flush_cmd()
 {
-    display_cmd_buf_t *cmd_buf;
-    uint32_t event_bit;
-    uint32_t wait_evts = EVENT_CMD_FLUSH_SUCCESS | EVENT_CMD_FLUSH_FAILURE;
+    enum bw_status status;
 
     while (!is_queue_empty(&g_cmd_queue) && g_state == DISPLAY_STATE_READY)
     {
+        struct display_cmd_buf *cmd_buf;
         queue_peek(&g_cmd_queue, (void**)&cmd_buf);
 
         g_i2c_h.addr = DISPLAY_ADDR;
@@ -175,20 +168,22 @@ static void flush_cmd()
         g_i2c_h.callback = on_cmd_flushed;
         i2c_transmit_dma(&g_i2c_h);
 
-        bw_status_t status = kernel_event_wait(&g_event, wait_evts, &event_bit, true, false, 1000);
+        uint32_t evt;
+        uint32_t wait_evts = EVENT_CMD_FLUSH_SUCCESS | EVENT_CMD_FLUSH_FAILURE;
+        status = kernel_event_wait(&g_event, wait_evts, &evt, true, false, 1000);
         if (status != STATUS_OK)
         {
             BW_LOG("Display exited with status: %d\n", status);
-            event_bit = EVENT_CMD_FLUSH_FAILURE;
+            evt = EVENT_CMD_FLUSH_FAILURE;
         }
 
-        if (event_bit & EVENT_CMD_FLUSH_SUCCESS)
+        if (evt & EVENT_CMD_FLUSH_SUCCESS)
         {
             g_state = DISPLAY_STATE_READY; 
             queue_pop(&g_cmd_queue, NULL);
             g_retry_counter = 0;
          }
-        else if (event_bit & EVENT_CMD_FLUSH_FAILURE)
+        else if (evt & EVENT_CMD_FLUSH_FAILURE)
         {
             if (g_retry_counter++ < MAX_RETRY_COUNTER)
             {
@@ -207,8 +202,8 @@ void display_power_on()
     {
         return;
     }
-
-    display_cmd_buf_t *cmd_buf;
+    
+    struct display_cmd_buf *cmd_buf;
     queue_back(&g_cmd_queue, (void**)&cmd_buf);
 
     cmd_buf->len = 0;
@@ -229,7 +224,7 @@ void display_power_off()
         return;
     }
 
-    display_cmd_buf_t *cmd_buf;
+    struct display_cmd_buf *cmd_buf;
     queue_back(&g_cmd_queue, (void**)&cmd_buf); 
 
     cmd_buf->len = 0;
@@ -246,11 +241,9 @@ void display_normal()
 {
     // prevent overwrites
     if (is_queue_full(&g_cmd_queue) || g_state <= DISPLAY_STATE_I2C_ERR)
-    {
         return;
-    }
-
-    display_cmd_buf_t *cmd_buf;
+    
+    struct display_cmd_buf *cmd_buf;
     queue_back(&g_cmd_queue, (void**)&cmd_buf); 
 
     cmd_buf->len = 0;
@@ -265,11 +258,9 @@ void display_inverse()
 {
     // prevent overwrites
     if (is_queue_full(&g_cmd_queue) || g_state <= DISPLAY_STATE_I2C_ERR)
-    {
         return;
-    }
-
-    display_cmd_buf_t *cmd_buf;
+    
+    struct display_cmd_buf *cmd_buf;
     queue_back(&g_cmd_queue, (void**)&cmd_buf); 
 
     cmd_buf->len = 0;
@@ -282,31 +273,35 @@ void display_inverse()
 
 void display_set_brightness(uint8_t value)
 {
-    // prevent overwrites
+    struct display_cmd_buf *cmd_buf;
     if (is_queue_full(&g_cmd_queue) || g_state <= DISPLAY_STATE_I2C_ERR)
-    {
         return;
+
+    queue_back(&g_cmd_queue, (void**)&cmd_buf);
+
+    uint8_t contrast;
+    uint8_t phase2;
+    uint8_t vcomh;
+
+    if (value == 0) {
+        contrast = 0x01;
+        phase2   = 0x01;
+        vcomh    = 0x00;
+    } else {
+        uint32_t val_sq = (uint32_t)value * value;
+        contrast = (uint8_t)(1 + (val_sq >> 8));
+
+        phase2 = (uint8_t)(2 + ((uint16_t)value * 12) / 255);
+        if (value < 48) {
+            vcomh = 0x00;
+        } else if (value < 192) {
+            vcomh = 0x20;
+        } else {
+            vcomh = 0x30;
+        }
     }
 
-    display_cmd_buf_t *cmd_buf;
-    queue_back(&g_cmd_queue, (void**)&cmd_buf); 
-    
-    uint8_t phase2    = 1 + ((uint16_t)value * 14) / 255;
-    uint8_t precharge = (phase2 << 4) | 0x01; 
-
-    uint8_t vcomh;
-    if (value < 85)
-    {
-        vcomh = 0x00;
-    }   
-    else if (value < 170)
-    {
-        vcomh = 0x20;
-    }   
-    else       
-    {
-        vcomh = 0x30;
-    }   
+    uint8_t precharge = (phase2 << 4) | 0x02;
 
     cmd_buf->len = 0;
     cmd_buf->buf[cmd_buf->len++] = DISPLAY_CTRL_CMD_ONLY;
@@ -315,7 +310,7 @@ void display_set_brightness(uint8_t value)
     cmd_buf->buf[cmd_buf->len++] = DISPLAY_CMD_SET_COMH_DESELECT;
     cmd_buf->buf[cmd_buf->len++] = vcomh; 
     cmd_buf->buf[cmd_buf->len++] = DISPLAY_CMD_SET_CONTRAST;
-    cmd_buf->buf[cmd_buf->len++] = value;
+    cmd_buf->buf[cmd_buf->len++] = contrast;
 
     queue_push(&g_cmd_queue, NULL);
     flush_cmd();
@@ -324,9 +319,8 @@ void display_set_brightness(uint8_t value)
 void display_clear_screen()
 {
     if (g_state <= DISPLAY_STATE_I2C_ERR)
-    {
         return;
-    }
+    
 
     g_flush_pending = true;
     g_fb.num_pages = 8;
@@ -346,11 +340,9 @@ static void orr_page_region_fill(uint8_t page, uint8_t scol, uint8_t ecol, uint8
 void display_fill_rect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t value)
 {
     BW_ASSERT(x < 128 && y < 64 && w <= 128 && w > 0 && h <= 64 && h > 0, "Invalid x:%d, y:%d, w:%d, h:%d ", x, y, w, h);
-
-    if (g_state <= DISPLAY_STATE_I2C_ERR)
-    {
+    if (g_state <= DISPLAY_STATE_I2C_ERR)  
         return;
-    }
+    
 
     g_flush_pending = true;
 
@@ -388,13 +380,11 @@ void display_fill_rect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t value
 void display_draw_bitmap(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *data)
 {
     BW_ASSERT(x < 128 && y < 64 && w <= 128 && w > 0 && h <= 64 && h > 0, "Invalid x:%d, y:%d, w:%d, h:%d ", x, y, w, h);
-
     if (g_state <= DISPLAY_STATE_I2C_ERR)
-    {
         return;
-    }
-
-    size_t idx, i = 0;
+    
+    size_t idx;
+    size_t i = 0;
     g_flush_pending = true;
 
     uint8_t offset = y % 8;
@@ -461,11 +451,9 @@ static void orr_page_region_invert(uint8_t page, uint8_t scol, uint8_t ecol, uin
 void display_region_invert(uint8_t x, uint8_t y, uint8_t w, uint8_t h)
 {
     BW_ASSERT(x < 128 && y < 64 && w <= 128 && w > 0 && h <= 64 && h > 0, "Invalid x:%d, y:%d, w:%d, h:%d ", x, y, w, h);
-
     if (g_state <= DISPLAY_STATE_I2C_ERR)
-    {
         return;
-    }
+    
 
     g_flush_pending = true;
 
@@ -501,11 +489,11 @@ void display_region_invert(uint8_t x, uint8_t y, uint8_t w, uint8_t h)
 
 void display_flush()
 {
+    enum bw_status status;
+    
     if (!g_flush_pending || g_fb.num_pages == 0 || g_state <= DISPLAY_STATE_I2C_ERR)
-    {
         return;
-    }
-
+    
     g_fb.buf[11] = g_fb.num_pages - 1;
 
     g_i2c_h.addr = DISPLAY_ADDR;
@@ -515,7 +503,7 @@ void display_flush()
     i2c_transmit_dma(&g_i2c_h);
     
     uint32_t event_bit;
-    bw_status_t status = kernel_event_wait(&g_event, EVENT_FLUSH_SUCCESS | EVENT_FLUSH_FAILURE, &event_bit, true, false, 1000);
+    status = kernel_event_wait(&g_event, EVENT_FLUSH_SUCCESS | EVENT_FLUSH_FAILURE, &event_bit, true, false, 1000);
     if (status != STATUS_OK)
     {
         BW_LOG("Display exited with status: %d\n", status);

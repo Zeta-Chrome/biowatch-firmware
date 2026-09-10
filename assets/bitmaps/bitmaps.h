@@ -3,20 +3,23 @@
 
 #include "subsys/ui/ui_common.h"
 
-typedef struct
-{
-    ui_size_t size;
-    const uint8_t *data;
-} bmp_t;
+struct bmp {
+	struct ui_size size;
+	const uint8_t *data;
+};
 
-extern const bmp_t logo_bmp;
-extern const bmp_t clock_bmp;
-extern const bmp_t steps_bmp;
-extern const bmp_t heart_rate_bmp;
-extern const bmp_t spo2_bmp;
-extern const bmp_t calories_bmp;
-extern const bmp_t weather_bmp;
-extern const bmp_t ble_bmp;
-extern const bmp_t settings_bmp;
+extern const struct bmp logo_bmp;
+extern const struct bmp clock_bmp;
+extern const struct bmp steps_bmp;
+extern const struct bmp vitals_bmp;
+extern const struct bmp calories_bmp;
+extern const struct bmp weather_bmp;
+extern const struct bmp ble_bmp;
+extern const struct bmp settings_bmp;
+extern const struct bmp time_bmp;
+extern const struct bmp calendar_bmp;
+extern const struct bmp timer_bmp;
+extern const struct bmp heart_rate_bmp;
+extern const struct bmp spo2_bmp;
 
 #endif

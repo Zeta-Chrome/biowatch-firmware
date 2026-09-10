@@ -1,7 +1,7 @@
 #ifndef BSP_H
 #define BSP_H
 
-#include "pins.h"
+#include "pins.h" // IWYU pragma: export
 #include "stm32wb55xx.h"
 
 #define PL_OXIM_I2C I2C1
@@ -26,8 +26,13 @@
 #define PL_IMU_EXTI1 PA3
 #define PL_IMU_EXTI1_IRQn EXTI3_IRQn
 
+#define PL_LDR_PIN PA1
+#define PL_LDR_ADC_CH ADC_CH_PA1
 #define PL_VIB_PIN PA10
 #define PL_BUZZ_PIN PB2
+#define PL_NEXT_PIN PA8
+#define PL_CLICK_PIN PA9
+#define PL_HOME_PIN PA2
 
 void bsp_init();
 

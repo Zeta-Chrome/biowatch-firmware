@@ -186,7 +186,6 @@ ifeq ($(METHOD), stlink)
 	@echo "Ctrl+C to stop"
 	@$(OCD) \
 		-c "init" \
-		-c "reset run" \
 		$(OCD_RTT) & OCD_PID=$$!; \
 		trap "kill $$OCD_PID 2>/dev/null; wait $$OCD_PID 2>/dev/null" INT TERM EXIT; \
 		until nc -z localhost $(RTT_PORT) 2>/dev/null; do sleep 0.1; done; \
@@ -202,12 +201,21 @@ ifeq ($(METHOD), stlink)
 	@$(PREFIX)gdb -tui\
 		-ex "set remotetimeout 10" \
 		-ex "target extended-remote :3333" \
-		-ex "monitor reset halt" \
 		-ex "break main" \
-		-ex "continue" \
 		$(BUILD_DIR)/$(TARGET).elf
 else
 	@echo "GDB only supported with STLink"
+endif
+
+reset:
+ifeq ($(METHOD),stlink)
+	@echo "Resetting target..."
+	@$(OCD) \
+		-c "init" \
+		-c "reset run" \
+		-c "shutdown"
+else
+	@echo "Reset only supported with STLink"
 endif
 
 recover:
@@ -224,9 +232,8 @@ clean:
 	@echo "Cleaned $(BUILD_ROOT)"
 
 compiledb:
-	@make clean_all
-	@bear -- $(MAKE) -C $(CORE_DIR) DEBUG=$(DEBUG) LOGGER=$(LOGGER)
-	@bear --append -- $(MAKE) DEBUG=$(DEBUG) LOGGER=$(LOGGER)
+	@make clean
+	@bear -- $(MAKE) DEBUG=$(DEBUG) LOGGER=$(LOGGER)
 	@echo "compile_commands.json updated"
 
 CHECK_DIR := build_core

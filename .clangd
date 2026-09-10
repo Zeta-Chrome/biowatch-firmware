@@ -1,0 +1,12 @@
+CompileFlags:
+  Compiler: arm-none-eabi-gcc
+  Add:
+    - "-I/opt/toolchains/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi/arm-none-eabi/include"
+    - "-I/opt/toolchains/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi/lib/gcc/arm-none-eabi/15.3.1/include"
+
+# Allow clangd to execute arm-none-eabi-gcc to fetch internal system includes automatically
+---
+If:
+  PathMatch: .*
+CompileFlags:
+  QueryDriver: "/opt/toolchains/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-*"

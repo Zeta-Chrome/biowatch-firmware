@@ -8,16 +8,11 @@
 #define DISPLAY_SCREEN_W 128
 #define DISPLAY_SCREEN_H 64
 
-typedef enum
-{
-    DISPLAY_STATE_UNINITIALIZED,
-    DISPLAY_STATE_I2C_ERR,
-    DISPLAY_STATE_READY
-} display_state_t;
+enum display_state { DISPLAY_STATE_UNINITIALIZED, DISPLAY_STATE_I2C_ERR, DISPLAY_STATE_READY };
 
 void display_init(bool invert_x, bool invert_y);
-display_state_t display_get_state();
-i2c_handle_t *display_get_i2c_handle();
+enum display_state display_get_state();
+struct i2c_handle *display_get_i2c_handle();
 
 void display_power_on();
 void display_power_off();

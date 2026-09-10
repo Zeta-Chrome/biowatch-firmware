@@ -19,645 +19,607 @@
 #define EVENT_ERR BIT(3)
 
 static imu_callback_t g_callback;
-static exti_handle_t g_exti1_h;
-static spi_handle_t g_spi_h;
-static event_t g_event;
+static struct exti_handle g_exti1_h;
+static struct spi_handle g_spi_h;
+static struct event g_event;
 static uint8_t g_rx_buf[16];
 static uint8_t g_tx_buf[16];
 static bool g_gyro_en = false;
 static uint8_t g_en_ints[2];
-static mutex_t g_mutex;
+static struct mutex g_mutex;
 
 static void on_interrupt1(void *user_data)
 {
-    (void)user_data;
-    g_callback();
+	(void)user_data;
+
+	if (g_callback)
+		g_callback();
 }
 
-static void on_spi_callback(bw_status_t status, void *user_data)
+static void on_spi_callback(enum bw_status status, void *user_data)
 {
-    (void)user_data;
-    if (status == STATUS_OK)
-    {
-        kernel_event_set_from_isr(&g_event, EVENT_OK);
-    }
-    else if (status == STATUS_SPI_MODF)
-    {
-        kernel_event_set_from_isr(&g_event, EVENT_MODF);
-    }
-    else if (status == STATUS_SPI_OVR)
-    {
-        kernel_event_set_from_isr(&g_event, EVENT_OVR);
-    }
-    else
-    {
-        kernel_event_set_from_isr(&g_event, EVENT_ERR);
-    }
+	(void)user_data;
+	if (status == STATUS_OK)
+		kernel_event_set_from_isr(&g_event, EVENT_OK);
+	else if (status == STATUS_SPI_MODF)
+		kernel_event_set_from_isr(&g_event, EVENT_MODF);
+	else if (status == STATUS_SPI_OVR)
+		kernel_event_set_from_isr(&g_event, EVENT_OVR);
+	else
+		kernel_event_set_from_isr(&g_event, EVENT_ERR);
 }
 
-static bw_status_t transact_and_wait(uint16_t len)
+static enum bw_status transact_and_wait(uint16_t len)
 {
-    g_spi_h.len = len;
-    gpio_set_level(PL_IMU_CS, 0);
+	enum bw_status status;
 
-    spi_bus_lock(g_spi_h.perip);
-    spi_transact_dma(&g_spi_h);
+	g_spi_h.len = len;
+	gpio_set_level(PL_IMU_CS, 0);
 
-    uint32_t event_bit;
-    bw_status_t status = kernel_event_wait(&g_event, EVENT_OK | EVENT_MODF | EVENT_OVR | EVENT_ERR, &event_bit, true, false,
-                                           100);
-    spi_bus_unlock(g_spi_h.perip);
+	spi_bus_lock(g_spi_h.perip);
+	spi_transact_dma(&g_spi_h);
 
-    gpio_set_level(PL_IMU_CS, 1);
-    if (status == STATUS_TIMEOUT || (event_bit & (EVENT_MODF | EVENT_OVR | EVENT_ERR)))
-    {
-        BW_LOG("SPI Fail: %s\n", (status == STATUS_TIMEOUT) ? "TIMEOUT"
-                                 : (event_bit & EVENT_MODF) ? "MODF"
-                                 : (event_bit & EVENT_OVR)  ? "OVR"
-                                                            : "ERR");
-        return STATUS_ERR;
-    }
+	uint32_t event_bit;
+	status = kernel_event_wait(&g_event, EVENT_OK | EVENT_MODF | EVENT_OVR | EVENT_ERR, &event_bit,
+							   true, false, 100);
+	spi_bus_unlock(g_spi_h.perip);
 
-    return STATUS_OK;
+	gpio_set_level(PL_IMU_CS, 1);
+	if (status == STATUS_TIMEOUT || (event_bit & (EVENT_MODF | EVENT_OVR | EVENT_ERR))) {
+		BW_LOG("SPI Fail: %s\n", (status == STATUS_TIMEOUT) ? "TIMEOUT" :
+								 (event_bit & EVENT_MODF)	? "MODF" :
+								 (event_bit & EVENT_OVR)	? "OVR" :
+															  "ERR");
+		return STATUS_ERR;
+	}
+
+	return STATUS_OK;
 }
 
 static uint8_t encode_no_motion_dur(uint8_t duration_sec)
 {
-    if (duration_sec <= 20)
-    {
-        uint8_t val = (uint8_t)(duration_sec * 100 / 128);
-        if (val > 0)
-            val -= 1;
-        val &= 0x0F;
-        return val;
-    }
-    else if (duration_sec <= 102)
-    {
-        uint8_t val = (uint8_t)(duration_sec * 100 / 512);
-        if (val >= 5)
-            val -= 5;
-        val &= 0x0F;
-        return (0x01 << 4) | val;
-    }
-    else
-    {
-        uint8_t val = (uint8_t)(duration_sec * 100 / 1024);
-        if (val >= 11)
-            val -= 11;
-        val &= 0x1F;
-        return (0x01 << 5) | val;
-    }
+	if (duration_sec <= 20) {
+		uint8_t val = (uint8_t)(duration_sec * 100 / 128);
+		if (val > 0)
+			val -= 1;
+		val &= 0x0F;
+		return val;
+	} else if (duration_sec <= 102) {
+		uint8_t val = (uint8_t)(duration_sec * 100 / 512);
+		if (val >= 5)
+			val -= 5;
+		val &= 0x0F;
+		return (0x01 << 4) | val;
+	} else {
+		uint8_t val = (uint8_t)(duration_sec * 100 / 1024);
+		if (val >= 11)
+			val -= 11;
+		val &= 0x1F;
+		return (0x01 << 5) | val;
+	}
 }
 
-static bw_status_t imu_configure(imu_odr_t odr, imu_step_mode_t st_mode, imu_nomo_t nomo_mode, uint16_t nomo_dur_s)
+static enum bw_status imu_configure(enum imu_odr odr, enum imu_step_mode st_mode,
+									enum imu_nomo nomo_mode, uint16_t nomo_dur_s)
 {
-    // Configure accelerometer and gyroscope
-    g_tx_buf[0] = IMU_WRITE | IMU_ACC_CONF;
-    g_tx_buf[1] = IMU_ACC_CONF_US_Msk | 0x0 << IMU_ACC_CONF_BWP_Pos | odr << IMU_ACC_CONF_ODR_Pos; // us, OSR4
-    g_tx_buf[2] = 0x8 << IMU_ACC_RANGE_Pos;                                                        // +- 8g
-    g_tx_buf[3] = 0x0 << IMU_GYR_CONF_BWP_Pos | odr << IMU_GYR_CONF_ODR_Pos;                       // OSR4
-    g_tx_buf[4] = 0x3 << IMU_GYR_RANGE_Pos;                                                        // 250 deg/s
-    bw_status_t status = transact_and_wait(5);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to configure accelerometer and gyroscope\n");
-        return status;
-    }
+	// Configure accelerometer and gyroscope
+	g_tx_buf[0] = IMU_WRITE | IMU_ACC_CONF;
+	g_tx_buf[1] = IMU_ACC_CONF_US_Msk | 0x0 << IMU_ACC_CONF_BWP_Pos |
+				  odr << IMU_ACC_CONF_ODR_Pos; // us, OSR4
+	g_tx_buf[2] = 0x8 << IMU_ACC_RANGE_Pos; // +- 8g
+	g_tx_buf[3] = 0x0 << IMU_GYR_CONF_BWP_Pos | odr << IMU_GYR_CONF_ODR_Pos; // OSR4
+	g_tx_buf[4] = 0x3 << IMU_GYR_RANGE_Pos; // 250 deg/s
+	enum bw_status status = transact_and_wait(5);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to configure accelerometer and gyroscope\n");
+		return status;
+	}
 
-    // Configure step conf with normal mode
-    g_tx_buf[0] = IMU_WRITE | IMU_STEP_CONF;
-    switch (st_mode)
-    {
-    case IMU_STEP_MODE_NORMAL:
-        g_tx_buf[1] = 0x15;
-        g_tx_buf[2] = IMU_STEP_CNT_EN_Msk | 0x3;
-        break;
-    case IMU_STEP_MODE_SENSITIVE:
-        g_tx_buf[1] = 0x2D;
-        g_tx_buf[2] = IMU_STEP_CNT_EN_Msk | 0x0;
-        break;
-    case IMU_STEP_MODE_ROBUST:
-        g_tx_buf[1] = 0x1D;
-        g_tx_buf[2] = IMU_STEP_CNT_EN_Msk | 0x7;
-        break;
-    }
-    status = transact_and_wait(3);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to configure step\n");
-        return status;
-    }
+	// Configure step conf with normal mode
+	g_tx_buf[0] = IMU_WRITE | IMU_STEP_CONF;
+	switch (st_mode) {
+	case IMU_STEP_MODE_NORMAL:
+		g_tx_buf[1] = 0x15;
+		g_tx_buf[2] = IMU_STEP_CNT_EN_Msk | 0x3;
+		break;
+	case IMU_STEP_MODE_SENSITIVE:
+		g_tx_buf[1] = 0x2D;
+		g_tx_buf[2] = IMU_STEP_CNT_EN_Msk | 0x0;
+		break;
+	case IMU_STEP_MODE_ROBUST:
+		g_tx_buf[1] = 0x1D;
+		g_tx_buf[2] = IMU_STEP_CNT_EN_Msk | 0x7;
+		break;
+	}
+	status = transact_and_wait(3);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to configure step\n");
+		return status;
+	}
 
-    // Configure nomotion int
-    g_tx_buf[0] = IMU_WRITE | IMU_INT_MO0;
-    g_tx_buf[1] = encode_no_motion_dur(nomo_dur_s) << IMU_INT_MO0_SN_DUR_Pos;
-    g_tx_buf[2] = 0;
-    g_tx_buf[3] = nomo_mode << IMU_INT_MO2_SN_TH_Pos;
-    g_tx_buf[4] = IMU_INT_MO3_NOMO_SEL_Msk;
-    status = transact_and_wait(5);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to configure nomotion\n");
-        return status;
-    }
+	// Configure nomotion int
+	g_tx_buf[0] = IMU_WRITE | IMU_INT_MO0;
+	g_tx_buf[1] = encode_no_motion_dur(nomo_dur_s) << IMU_INT_MO0_SN_DUR_Pos;
+	g_tx_buf[2] = 0;
+	g_tx_buf[3] = nomo_mode << IMU_INT_MO2_SN_TH_Pos;
+	g_tx_buf[4] = IMU_INT_MO3_NOMO_SEL_Msk;
+	status = transact_and_wait(5);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to configure nomotion\n");
+		return status;
+	}
 
-    // Map interrupts
-    g_tx_buf[0] = IMU_WRITE | IMU_INT1_MAP0;
-    g_tx_buf[1] = IMU_INT1_MAP0_NOMO_Msk;
-    g_tx_buf[2] = IMU_INT1_MAP1_DRDY_Msk;
-    status = transact_and_wait(3);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to map interrupts\n");
-        return status;
-    }
+	// Map interrupts
+	g_tx_buf[0] = IMU_WRITE | IMU_INT1_MAP0;
+	g_tx_buf[1] = IMU_INT1_MAP0_NOMO_Msk;
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to map interrupts\n");
+		return status;
+	}
 
-    // Power up accelormeter
-    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-    g_tx_buf[1] = IMU_CMD_ACC_LOW_PWR;
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to power on accelerometer\n");
-        return status;
-    }
-    kernel_task_delay(5); // Delay of maximum 3.8ms
+	// Power up accelormeter
+	g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+	g_tx_buf[1] = IMU_CMD_ACC_LOW_PWR;
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to power on accelerometer\n");
+		return status;
+	}
+	kernel_task_delay(5); // Delay of maximum 3.8ms
 
-    // Enable interrupts
-    g_en_ints[0] = 0;
-    g_en_ints[1] = IMU_INT_EN2_STEP_Msk | IMU_INT_EN2_NOMOX_Msk | IMU_INT_EN2_NOMOY_Msk | IMU_INT_EN2_NOMOZ_Msk;
-    g_tx_buf[0] = IMU_WRITE | IMU_INT_EN1;
-    g_tx_buf[1] = g_en_ints[0];
-    g_tx_buf[2] = g_en_ints[1];
-    g_tx_buf[3] = IMU_INT1_OUT_EN_Msk; // PUSH PULL + ACTIVE LOW
-    status = transact_and_wait(4);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to enable interrupts\n");
-        return status;
-    }
+	// Enable interrupts
+	g_en_ints[0] = 0;
+	g_en_ints[1] = IMU_INT_EN2_STEP_Msk | IMU_INT_EN2_NOMOX_Msk | IMU_INT_EN2_NOMOY_Msk |
+				   IMU_INT_EN2_NOMOZ_Msk;
+	g_tx_buf[0] = IMU_WRITE | IMU_INT_EN1;
+	g_tx_buf[1] = g_en_ints[0];
+	g_tx_buf[2] = g_en_ints[1];
+	g_tx_buf[3] = IMU_INT1_OUT_EN_Msk | IMU_INT1_EDGE_Msk; // PUSH PULL + FALLING EDGE
+	status = transact_and_wait(4);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to enable interrupts\n");
+		return status;
+	}
 
-    // Enable Offset Compensation
-    g_tx_buf[0] = IMU_WRITE | IMU_OFFSET_CONF;
-    g_tx_buf[1] = IMU_OFFSET_CONF_ACC_EN_Msk | IMU_OFFSET_CONF_GYR_EN_Msk;
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to enable offset compensation\n");
-        return status;
-    }
+	// Enable Offset Compensation
+	g_tx_buf[0] = IMU_WRITE | IMU_OFFSET_CONF;
+	g_tx_buf[1] = IMU_OFFSET_CONF_ACC_EN_Msk | IMU_OFFSET_CONF_GYR_EN_Msk;
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to enable offset compensation\n");
+		return status;
+	}
 
-    return STATUS_OK;
+	return STATUS_OK;
 }
 
-bw_status_t imu_init(imu_odr_t odr, imu_step_mode_t st_mode, imu_nomo_t nomo_mode, uint16_t nomo_dur_s,
-                     imu_callback_t callback)
+enum bw_status imu_init(enum imu_odr odr, enum imu_step_mode st_mode, enum imu_nomo nomo_mode,
+						uint16_t nomo_dur_s, imu_callback_t callback)
 {
-    BW_ASSERT(nomo_dur_s >= 2 && nomo_dur_s <= 431, "Double tap duration not in valid range (Expected 2s-431s)");
+	BW_ASSERT(nomo_dur_s >= 2 && nomo_dur_s <= 431,
+			  "Double tap duration not in valid range (Expected 2s-431s)");
 
-    g_callback = callback;
+	g_callback = callback;
 
-    // Set CS to high to use BMI160 in SPI mode
-    gpio_set_level(PL_IMU_CS, 1);
+	// Set CS to high to use BMI160 in SPI mode
+	gpio_set_level(PL_IMU_CS, 1);
 
-    // Let IMU power up
-    kernel_task_delay(10);
+	// Let IMU power up
+	kernel_task_delay(10);
 
-    // Init event
-    kernel_event_init(&g_event);
-    kernel_mutex_init(&g_mutex);
+	// Init event
+	kernel_event_init(&g_event);
+	kernel_mutex_init(&g_mutex);
 
-    // Common handle configurations
-    g_spi_h.data_sz = 8;
-    g_spi_h.rx_buf = g_rx_buf;
-    g_spi_h.tx_buf = g_tx_buf;
-    g_spi_h.user_data = NULL;
-    g_spi_h.callback = on_spi_callback;
+	// Common handle configurations
+	g_spi_h.data_sz = 8;
+	g_spi_h.rx_buf = g_rx_buf;
+	g_spi_h.tx_buf = g_tx_buf;
+	g_spi_h.user_data = NULL;
+	g_spi_h.callback = on_spi_callback;
 
-    // Dummy byte transaction
-    g_tx_buf[0] = IMU_READ | 0x7F;
-    bw_status_t status = transact_and_wait(1);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to read Dummy byte\n");
-        return status;
-    }
-    kernel_task_delay(10);
+	// Dummy byte transaction
+	g_tx_buf[0] = IMU_READ | 0x7F;
+	enum bw_status status = transact_and_wait(1);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to read Dummy byte\n");
+		return status;
+	}
+	kernel_task_delay(10);
 
-    status = imu_configure(odr, st_mode, nomo_mode, nomo_dur_s);
-    if (status != STATUS_OK)
-    {
-        return status;
-    }
+	status = imu_configure(odr, st_mode, nomo_mode, nomo_dur_s);
+	if (status != STATUS_OK)
+		return status;
 
-    return STATUS_OK;
+	return STATUS_OK;
 }
 
-bw_status_t imu_start_foc()
+static void print_foc()
 {
-    bw_status_t status;
+	int8_t acc_x = (int8_t)g_rx_buf[1];
+	int8_t acc_y = (int8_t)g_rx_buf[2];
+	int8_t acc_z = (int8_t)g_rx_buf[3];
 
-    // Accelerometer to normal
-    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-    g_tx_buf[1] = IMU_CMD_ACC_NORMAL;
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to turn on accelerometer\n");
-        return status;
-    }
+	uint16_t raw_gyr_x = (((uint16_t)g_rx_buf[7] & 0x03) << (8 - IMU_OFFSET_GYR_X_Pos)) |
+						 g_rx_buf[4];
+	uint16_t raw_gyr_y = (((uint16_t)g_rx_buf[7] & 0x0C) << (8 - IMU_OFFSET_GYR_Y_Pos)) |
+						 g_rx_buf[5];
+	uint16_t raw_gyr_z = (((uint16_t)g_rx_buf[7] & 0x30) << (8 - IMU_OFFSET_GYR_Z_Pos)) |
+						 g_rx_buf[6];
 
-    // Gyroscope to normal
-    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-    g_tx_buf[1] = IMU_CMD_GYR_NORMAL;
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to turn on gyroscope\n");
-        return status;
-    }
-    kernel_task_delay(100);
+	// Sign extension
+	int16_t gyr_x = (raw_gyr_x & 0x0200) ? (int16_t)(raw_gyr_x | 0xFC00) : (int16_t)raw_gyr_x;
+	int16_t gyr_y = (raw_gyr_y & 0x0200) ? (int16_t)(raw_gyr_y | 0xFC00) : (int16_t)raw_gyr_y;
+	int16_t gyr_z = (raw_gyr_z & 0x0200) ? (int16_t)(raw_gyr_z | 0xFC00) : (int16_t)raw_gyr_z;
 
-    // Enable FOC
-    g_tx_buf[0] = IMU_WRITE | IMU_FOC_CONF;
-    g_tx_buf[1] = IMU_FOC_CONF_GYR_EN_Msk | 0x0 << IMU_FOC_CONF_ACC_X_Pos | 0x0 << IMU_FOC_CONF_ACC_Y_Pos
-                  | 0x2 << IMU_FOC_CONF_ACC_Z_Pos; // (0g , 0g, -1g)
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to configure FOC\n");
-        return status;
-    }
-
-    // Start FOC
-    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-    g_tx_buf[1] = IMU_CMD_START_FOC;
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to start FOC\n");
-        return status;
-    }
-
-    // Wait till foc_rdy is set
-    g_rx_buf[1] = 0;
-    while (!(g_rx_buf[1] & IMU_ST_FOC_RDY_Msk))
-    {
-        g_tx_buf[0] = IMU_READ | IMU_ST;
-        g_tx_buf[1] = 0;
-        status = transact_and_wait(2);
-        if (status != STATUS_OK)
-        {
-            BW_LOG("Failed to read status register\n");
-            return STATUS_ERR;
-        }
-    }
-
-    // Prog NVM
-    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-    g_tx_buf[1] = IMU_CMD_PROG_NVM;
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to program NVM\n");
-        return status;
-    }
-
-    // Wait till nvm_rdy is set
-    g_rx_buf[1] = 0;
-    while (!(g_rx_buf[1] & IMU_ST_NVM_RDY_Msk))
-    {
-        g_tx_buf[0] = IMU_READ | IMU_ST;
-        g_tx_buf[1] = 0;
-        status = transact_and_wait(2);
-        if (status != STATUS_OK)
-        {
-            BW_LOG("Failed to read status register\n");
-            return STATUS_ERR;
-        }
-    }
-
-    g_tx_buf[0] = IMU_READ | IMU_OFFSET;
-    g_tx_buf[1] = 0;
-    status = transact_and_wait(8);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to read offset register\n");
-        return STATUS_ERR;
-    }
-
-    int8_t acc_x = (int8_t)g_rx_buf[1];
-    int8_t acc_y = (int8_t)g_rx_buf[2];
-    int8_t acc_z = (int8_t)g_rx_buf[3];
-
-    uint16_t raw_gyr_x = (((uint16_t)g_rx_buf[7] & 0x03) << (8 - IMU_OFFSET_GYR_X_Pos)) | g_rx_buf[4];
-    uint16_t raw_gyr_y = (((uint16_t)g_rx_buf[7] & 0x0C) << (8 - IMU_OFFSET_GYR_Y_Pos)) | g_rx_buf[5];
-    uint16_t raw_gyr_z = (((uint16_t)g_rx_buf[7] & 0x30) << (8 - IMU_OFFSET_GYR_Z_Pos)) | g_rx_buf[6];
-
-    // Sign extension
-    int16_t gyr_x = (raw_gyr_x & 0x0200) ? (int16_t)(raw_gyr_x | 0xFC00) : (int16_t)raw_gyr_x;
-    int16_t gyr_y = (raw_gyr_y & 0x0200) ? (int16_t)(raw_gyr_y | 0xFC00) : (int16_t)raw_gyr_y;
-    int16_t gyr_z = (raw_gyr_z & 0x0200) ? (int16_t)(raw_gyr_z | 0xFC00) : (int16_t)raw_gyr_z;
-
-    BW_LOG("FOC: ACC : (%d, %d, %d), GYR: (%d, %d, %d)]\n", acc_x, acc_y, acc_z, gyr_x, gyr_y, gyr_z);
-
-    return STATUS_OK;
+	BW_LOG("FOC: ACC : (%d, %d, %d), GYR: (%d, %d, %d)]\n", acc_x, acc_y, acc_z, gyr_x, gyr_y,
+		   gyr_z);
 }
 
-bw_status_t imu_read_error()
+enum bw_status imu_start_foc()
 {
-    g_tx_buf[0] = IMU_READ | IMU_ERR;
-    g_tx_buf[1] = 0;
-    bw_status_t status = transact_and_wait(2);
-    if (status == STATUS_ERR)
-    {
-        BW_LOG("Failed to read error\n");
-        return status;
-    }
+	enum bw_status status;
 
-    BW_LOG("Err: %x, Fatal error : %d, Error Code : %d, Dropped cmd error: %d\n", g_rx_buf[1], g_rx_buf[1] & 0x1,
-           g_rx_buf[1] & 0x1E, g_rx_buf[1] & 0x40);
+	// Accelerometer to normal
+	g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+	g_tx_buf[1] = IMU_CMD_ACC_NORMAL;
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to turn on accelerometer\n");
+		return status;
+	}
 
-    return STATUS_OK;
+	// Gyroscope to normal
+	g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+	g_tx_buf[1] = IMU_CMD_GYR_NORMAL;
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to turn on gyroscope\n");
+		return status;
+	}
+	kernel_task_delay(100);
+
+	// Enable FOC
+	g_tx_buf[0] = IMU_WRITE | IMU_FOC_CONF;
+	g_tx_buf[1] = IMU_FOC_CONF_GYR_EN_Msk | 0x0 << IMU_FOC_CONF_ACC_X_Pos |
+				  0x0 << IMU_FOC_CONF_ACC_Y_Pos | 0x2 << IMU_FOC_CONF_ACC_Z_Pos; // (0g , 0g, -1g)
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to configure FOC\n");
+		return status;
+	}
+
+	// Start FOC
+	g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+	g_tx_buf[1] = IMU_CMD_START_FOC;
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to start FOC\n");
+		return status;
+	}
+
+	// Wait till foc_rdy is set
+	g_rx_buf[1] = 0;
+	while (!(g_rx_buf[1] & IMU_ST_FOC_RDY_Msk)) {
+		g_tx_buf[0] = IMU_READ | IMU_ST;
+		g_tx_buf[1] = 0;
+		status = transact_and_wait(2);
+		if (status != STATUS_OK) {
+			BW_LOG("Failed to read status register\n");
+			return STATUS_ERR;
+		}
+	}
+
+	// Prog NVM
+	g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+	g_tx_buf[1] = IMU_CMD_PROG_NVM;
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to program NVM\n");
+		return status;
+	}
+
+	// Wait till nvm_rdy is set
+	g_rx_buf[1] = 0;
+	while (!(g_rx_buf[1] & IMU_ST_NVM_RDY_Msk)) {
+		g_tx_buf[0] = IMU_READ | IMU_ST;
+		g_tx_buf[1] = 0;
+		status = transact_and_wait(2);
+		if (status != STATUS_OK) {
+			BW_LOG("Failed to read status register\n");
+			return STATUS_ERR;
+		}
+	}
+
+	g_tx_buf[0] = IMU_READ | IMU_OFFSET;
+	g_tx_buf[1] = 0;
+	status = transact_and_wait(8);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to read offset register\n");
+		return STATUS_ERR;
+	}
+
+	print_foc();
+
+	return STATUS_OK;
 }
 
-bw_status_t imu_read_int_status(uint8_t int_status[2])
+enum bw_status imu_read_error()
 {
-    g_tx_buf[0] = IMU_READ | IMU_INT_ST0;
-    g_tx_buf[1] = 0;
-    g_tx_buf[2] = 0;
-    bw_status_t status = transact_and_wait(3);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to read interrupt status\n");
-        return STATUS_ERR;
-    }
+	g_tx_buf[0] = IMU_READ | IMU_ERR;
+	g_tx_buf[1] = 0;
+	enum bw_status status = transact_and_wait(2);
+	if (status == STATUS_ERR) {
+		BW_LOG("Failed to read error\n");
+		return status;
+	}
 
-    int_status[0] = g_rx_buf[1];
-    int_status[1] = g_rx_buf[2];
+	BW_LOG("Err: %x, Fatal error : %d, Error Code : %d, Dropped cmd error: %d\n", g_rx_buf[1],
+		   g_rx_buf[1] & 0x1, g_rx_buf[1] & 0x1E, g_rx_buf[1] & 0x40);
 
-    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-    g_tx_buf[1] = IMU_CMD_INT_RST;
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to reset interrupt status\n");
-        return STATUS_ERR;
-    }
-
-    return STATUS_OK;
+	return STATUS_OK;
 }
 
-bw_status_t imu_read_step_cnt(uint16_t *step_cnt)
+enum bw_status imu_read_int_status(uint8_t int_status[2])
 {
-    g_tx_buf[0] = IMU_READ | IMU_STEP_CNT;
-    g_tx_buf[1] = 0;
-    g_tx_buf[2] = 0;
-    bw_status_t status = transact_and_wait(3);
-    if (status == STATUS_ERR)
-    {
-        BW_LOG("Failed to read step count\n");
-        return STATUS_ERR;
-    }
+	g_tx_buf[0] = IMU_READ | IMU_INT_ST0;
+	g_tx_buf[1] = 0;
+	g_tx_buf[2] = 0;
+	enum bw_status status = transact_and_wait(3);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to read interrupt status\n");
+		return STATUS_ERR;
+	}
 
-    *step_cnt = *(uint16_t *)(&g_rx_buf[1]);
-    return STATUS_OK;
+	int_status[0] = g_rx_buf[1];
+	int_status[1] = g_rx_buf[2];
+
+	g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+	g_tx_buf[1] = IMU_CMD_INT_RST;
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to reset interrupt status\n");
+		return STATUS_ERR;
+	}
+
+	return STATUS_OK;
 }
 
-bw_status_t imu_clear_step_cnt()
+enum bw_status imu_read_step_cnt(uint16_t *step_cnt)
 {
-    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-    g_tx_buf[1] = IMU_CMD_STEP_CNT_CLR;
-    bw_status_t status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to clear step count\n");
-        return status;
-    }
+	g_tx_buf[0] = IMU_READ | IMU_STEP_CNT;
+	g_tx_buf[1] = 0;
+	g_tx_buf[2] = 0;
+	enum bw_status status = transact_and_wait(3);
+	if (status == STATUS_ERR) {
+		BW_LOG("Failed to read step count\n");
+		return STATUS_ERR;
+	}
 
-    return STATUS_OK;
+	*step_cnt = *(uint16_t *)(&g_rx_buf[1]);
+	return STATUS_OK;
 }
 
-bw_status_t imu_enable_nomo_int()
+enum bw_status imu_clear_step_cnt()
 {
-    g_en_ints[1] |= IMU_INT_EN2_NOMOX_Msk | IMU_INT_EN2_NOMOY_Msk | IMU_INT_EN2_NOMOZ_Msk;
-    g_tx_buf[0] = IMU_WRITE | IMU_INT_EN2;
-    g_tx_buf[1] = g_en_ints[1];
-    bw_status_t status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to enable nomotion interrupts\n");
-        return status;
-    }
+	g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+	g_tx_buf[1] = IMU_CMD_STEP_CNT_CLR;
+	enum bw_status status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to clear step count\n");
+		return status;
+	}
 
-    return STATUS_OK;
+	return STATUS_OK;
 }
 
-bw_status_t imu_disable_nomo_int()
+enum bw_status imu_enable_nomo_int()
 {
-    g_en_ints[1] &= ~(IMU_INT_EN2_NOMOX_Msk | IMU_INT_EN2_NOMOY_Msk | IMU_INT_EN2_NOMOZ_Msk);
-    g_tx_buf[0] = IMU_WRITE | IMU_INT_EN2;
-    g_tx_buf[1] = g_en_ints[1];
-    bw_status_t status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to enable nomotion interrupts\n");
-        return status;
-    }
+	g_en_ints[1] |= IMU_INT_EN2_NOMOX_Msk | IMU_INT_EN2_NOMOY_Msk | IMU_INT_EN2_NOMOZ_Msk;
+	g_tx_buf[0] = IMU_WRITE | IMU_INT_EN2;
+	g_tx_buf[1] = g_en_ints[1];
+	enum bw_status status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to enable nomotion interrupts\n");
+		return status;
+	}
 
-    return STATUS_OK;
+	return STATUS_OK;
 }
 
-bw_status_t imu_start_stream(bool gyro_en)
+enum bw_status imu_disable_nomo_int()
 {
-    bw_status_t status;
-    kernel_mutex_lock(&g_mutex, MAX_TIMEOUT);
+	g_en_ints[1] &= ~(IMU_INT_EN2_NOMOX_Msk | IMU_INT_EN2_NOMOY_Msk | IMU_INT_EN2_NOMOZ_Msk);
+	g_tx_buf[0] = IMU_WRITE | IMU_INT_EN2;
+	g_tx_buf[1] = g_en_ints[1];
+	enum bw_status status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to enable nomotion interrupts\n");
+		return status;
+	}
 
-    if (gyro_en)
-    {
-        g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-        g_tx_buf[1] = IMU_CMD_GYR_NORMAL;
-        status = transact_and_wait(2);
-        if (status != STATUS_OK)
-        {
-            BW_LOG("Failed to turn on gyroscope\n");
-            kernel_mutex_unlock(&g_mutex);
-            return status;
-        }
-        g_gyro_en = true;
-        kernel_task_delay(80);
-    }
-
-    g_en_ints[0] |= IMU_INT_EN1_DRDY_Msk;
-    g_tx_buf[0] = IMU_WRITE | IMU_INT_EN1;
-    g_tx_buf[1] = g_en_ints[0];
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to enable data ready interrupt\n");
-        kernel_mutex_unlock(&g_mutex);
-        return status;
-    }
-
-    kernel_mutex_unlock(&g_mutex);
-
-    return STATUS_OK;
+	return STATUS_OK;
 }
 
-bw_status_t imu_read_sample(imu_acc_sample_t *acc_sample, imu_gyr_sample_t *gyr_sample)
+enum bw_status imu_start_stream(bool gyro_en)
 {
-    bw_status_t status;
-    kernel_mutex_lock(&g_mutex, MAX_TIMEOUT);
+	enum bw_status status;
+	kernel_mutex_lock(&g_mutex, MAX_TIMEOUT);
 
-    memset(g_tx_buf + 1, 0, 12);
-    g_tx_buf[0] = IMU_READ | IMU_GYR_DATA;
-    status = transact_and_wait(13);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to read data\n");
-        kernel_mutex_unlock(&g_mutex);
-        return status;
-    }
+	if (gyro_en) {
+		g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+		g_tx_buf[1] = IMU_CMD_GYR_NORMAL;
+		status = transact_and_wait(2);
+		if (status != STATUS_OK) {
+			BW_LOG("Failed to turn on gyroscope\n");
+			kernel_mutex_unlock(&g_mutex);
+			return status;
+		}
+		g_gyro_en = true;
+		kernel_task_delay(80);
+	}
 
-    if (g_gyro_en && gyr_sample)
-    {
-        *gyr_sample = *(imu_gyr_sample_t *)(g_rx_buf + 1);
-    }
+	g_en_ints[0] |= IMU_INT_EN1_DRDY_Msk;
+	g_tx_buf[0] = IMU_WRITE | IMU_INT_EN1;
+	g_tx_buf[1] = g_en_ints[0];
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to enable data ready interrupt\n");
+		kernel_mutex_unlock(&g_mutex);
+		return status;
+	}
 
-    if (acc_sample)
-    {
-        *acc_sample = *(imu_acc_sample_t *)(g_rx_buf + 7);
-    }
+	kernel_mutex_unlock(&g_mutex);
 
-    kernel_mutex_unlock(&g_mutex);
-
-    return STATUS_OK;
+	return STATUS_OK;
 }
 
-bw_status_t imu_stop_stream()
+enum bw_status imu_read_sample(struct acc_sample *acc, struct gyr_sample *gyr)
 {
-    bw_status_t status;
-    kernel_mutex_lock(&g_mutex, MAX_TIMEOUT);
+	enum bw_status status;
+	kernel_mutex_lock(&g_mutex, MAX_TIMEOUT);
 
-    g_en_ints[0] &= ~IMU_INT_EN1_DRDY_Msk;
-    g_tx_buf[0] = IMU_WRITE | IMU_INT_EN1;
-    g_tx_buf[1] = g_en_ints[0];
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to disable data ready interrupt\n");
-        kernel_mutex_unlock(&g_mutex);
-        return status;
-    }
+	memset(g_tx_buf + 1, 0, 12);
+	g_tx_buf[0] = IMU_READ | IMU_GYR_DATA;
+	status = transact_and_wait(13);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to read data\n");
+		kernel_mutex_unlock(&g_mutex);
+		return status;
+	}
 
-    if (g_gyro_en)
-    {
-        g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-        g_tx_buf[1] = IMU_CMD_GYR_SUSPEND;
-        status = transact_and_wait(2);
-        if (status != STATUS_OK)
-        {
-            BW_LOG("Failed to suspend gyroscope\n");
-            kernel_mutex_unlock(&g_mutex);
-            return STATUS_ERR;
-        }
-        g_gyro_en = false;
-    }
+	if (g_gyro_en && gyr) {
+		gyr->gx = (float)(*(int16_t *)(g_rx_buf + 1)) * 250 / INT16_MAX;
+		gyr->gy = (float)(*(int16_t *)(g_rx_buf + 3)) * 250 / INT16_MAX;
+		gyr->gz = (float)(*(int16_t *)(g_rx_buf + 5)) * 250 / INT16_MAX;
+	}
 
-    kernel_mutex_unlock(&g_mutex);
+	if (acc) {
+		acc->ax = (float)(*(int16_t *)(g_rx_buf + 7)) * 8 / INT16_MAX;
+		acc->ay = (float)(*(int16_t *)(g_rx_buf + 9)) * 8 / INT16_MAX;
+		acc->az = (float)(*(int16_t *)(g_rx_buf + 11)) * 8 / INT16_MAX;
+	}
 
-    return STATUS_OK;
+	kernel_mutex_unlock(&g_mutex);
+
+	return STATUS_OK;
 }
 
-bw_status_t imu_wakeup()
+enum bw_status imu_stop_stream()
 {
-    bw_status_t status;
+	enum bw_status status;
+	kernel_mutex_lock(&g_mutex, MAX_TIMEOUT);
 
-    // Enable interrupts
-    g_en_ints[0] = 0;
-    g_en_ints[1] = IMU_INT_EN2_STEP_Msk | IMU_INT_EN2_NOMOX_Msk | IMU_INT_EN2_NOMOY_Msk | IMU_INT_EN2_NOMOZ_Msk;
-    g_tx_buf[0] = IMU_WRITE | IMU_INT_EN1;
-    g_tx_buf[1] = g_en_ints[0];
-    g_tx_buf[2] = g_en_ints[1];
-    status = transact_and_wait(3);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to enable interrupts\n");
-        return status;
-    }
+	g_en_ints[0] &= ~IMU_INT_EN1_DRDY_Msk;
+	g_tx_buf[0] = IMU_WRITE | IMU_INT_EN1;
+	g_tx_buf[1] = g_en_ints[0];
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to disable data ready interrupt\n");
+		kernel_mutex_unlock(&g_mutex);
+		return status;
+	}
 
-    // Turn on accelerometer
-    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-    g_tx_buf[1] = IMU_CMD_ACC_LOW_PWR;
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to turn on accelerometer\n");
-        return status;
-    }
+	if (g_gyro_en) {
+		g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+		g_tx_buf[1] = IMU_CMD_GYR_SUSPEND;
+		status = transact_and_wait(2);
+		if (status != STATUS_OK) {
+			BW_LOG("Failed to suspend gyroscope\n");
+			kernel_mutex_unlock(&g_mutex);
+			return STATUS_ERR;
+		}
+		g_gyro_en = false;
+	}
 
-    return STATUS_OK;
+	kernel_mutex_unlock(&g_mutex);
+
+	return STATUS_OK;
 }
 
-bw_status_t imu_sleep()
+enum bw_status imu_wakeup()
 {
-    // Disable interrupts
-    g_en_ints[0] = 0;
-    g_en_ints[1] = 0;
-    g_tx_buf[0] = IMU_WRITE | IMU_INT_EN1;
-    g_tx_buf[1] = g_en_ints[0];
-    g_tx_buf[2] = g_en_ints[1];
-    bw_status_t status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to disable interrupts\n");
-        return STATUS_ERR;
-    }
+	enum bw_status status;
 
-    if (g_gyro_en)
-    {
-        // Turn off gyroscope
-        g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-        g_tx_buf[1] = IMU_CMD_GYR_SUSPEND;
-        status = transact_and_wait(2);
-        if (status != STATUS_OK)
-        {
-            BW_LOG("Failed to turn off gyroscope\n");
-            return status;
-        }
-    }
+	// Enable interrupts
+	g_en_ints[0] = 0;
+	g_en_ints[1] = IMU_INT_EN2_STEP_Msk | IMU_INT_EN2_NOMOX_Msk | IMU_INT_EN2_NOMOY_Msk |
+				   IMU_INT_EN2_NOMOZ_Msk;
+	g_tx_buf[0] = IMU_WRITE | IMU_INT_EN1;
+	g_tx_buf[1] = g_en_ints[0];
+	g_tx_buf[2] = g_en_ints[1];
+	status = transact_and_wait(3);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to enable interrupts\n");
+		return status;
+	}
 
-    return STATUS_OK;
+	// Turn on accelerometer
+	g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+	g_tx_buf[1] = IMU_CMD_ACC_LOW_PWR;
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to turn on accelerometer\n");
+		return status;
+	}
+
+	return STATUS_OK;
 }
 
-bw_status_t imu_shutdown()
+enum bw_status imu_sleep()
 {
-    bw_status_t status = imu_sleep();
-    if (status != STATUS_OK)
-    {
-        return status;
-    }
+	// Disable interrupts
+	g_en_ints[0] = 0;
+	g_en_ints[1] = 0;
+	g_tx_buf[0] = IMU_WRITE | IMU_INT_EN1;
+	g_tx_buf[1] = g_en_ints[0];
+	g_tx_buf[2] = g_en_ints[1];
+	enum bw_status status = transact_and_wait(3);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to disable interrupts\n");
+		return STATUS_ERR;
+	}
 
-    // Turn off accelerometer
-    g_tx_buf[0] = IMU_WRITE | IMU_CMD;
-    g_tx_buf[1] = IMU_CMD_ACC_SUSPEND;
-    status = transact_and_wait(2);
-    if (status != STATUS_OK)
-    {
-        BW_LOG("Failed to turn off accelerometer\n");
-        return status;
-    }
+	if (g_gyro_en) {
+		// Turn off gyroscope
+		g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+		g_tx_buf[1] = IMU_CMD_GYR_SUSPEND;
+		status = transact_and_wait(2);
+		if (status != STATUS_OK) {
+			BW_LOG("Failed to turn off gyroscope\n");
+			return status;
+		}
+	}
 
-    return STATUS_OK;
+	return STATUS_OK;
 }
 
-spi_handle_t *imu_get_spi_handle()
+enum bw_status imu_shutdown()
 {
-    return &g_spi_h;
+	enum bw_status status = imu_sleep();
+	if (status != STATUS_OK)
+		return status;
+
+	// Turn off accelerometer
+	g_tx_buf[0] = IMU_WRITE | IMU_CMD;
+	g_tx_buf[1] = IMU_CMD_ACC_SUSPEND;
+	status = transact_and_wait(2);
+	if (status != STATUS_OK) {
+		BW_LOG("Failed to turn off accelerometer\n");
+		return status;
+	}
+
+	return STATUS_OK;
 }
 
-exti_handle_t *imu_get_exti_handle(exti_callback_t *callback)
+struct spi_handle *imu_get_spi_handle()
 {
-    *callback = on_interrupt1;
-    return &g_exti1_h;
+	return &g_spi_h;
+}
+
+struct exti_handle *imu_get_exti_handle(exti_callback_t *callback)
+{
+	*callback = on_interrupt1;
+	return &g_exti1_h;
 }

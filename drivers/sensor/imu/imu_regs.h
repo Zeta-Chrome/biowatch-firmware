@@ -94,13 +94,13 @@
 
 #define IMU_INT_OUT 0x53
 #define IMU_INT2_OUT_EN_Msk BIT(7)
-#define IMU_INT2_OD_Pos 6
-#define IMU_INT2_LVL_Pos 5
-#define IMU_INT2_EDGE_Pos 4
+#define IMU_INT2_OD_Msk BIT(6)
+#define IMU_INT2_LVL_Msk BIT(5)
+#define IMU_INT2_EDGE_Msk BIT(4)
 #define IMU_INT1_OUT_EN_Msk BIT(3)
-#define IMU_INT1_OD_Pos 2
-#define IMU_INT1_LVL_Pos 1
-#define IMU_INT1_EDGE_Pos 0
+#define IMU_INT1_OD_Msk BIT(2)
+#define IMU_INT1_LVL_Msk BIT(1)
+#define IMU_INT1_EDGE_Msk BIT(0)
 
 #define IMU_INT1_MAP0 0x55
 #define IMU_INT1_MAP0_FLAT_Msk BIT(7)
