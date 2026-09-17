@@ -4,7 +4,9 @@
 #include "app/tasks/task_ble.h"
 #include "app/tasks/task_env.h"
 #include "app/tasks/task_haptics.h"
+#include "app/tasks/tasks.h"
 #include "drivers/display/display.h"
+#include "kernel/sync/event.h"
 #include "kernel/task/task.h"
 #include "kernel/timer.h"
 #include "lib/logger.h"
@@ -19,6 +21,8 @@
 #include "subsys/ui/ui.h"
 #include "biowatch/bsp.h"
 #include "kernel/kernel.h"
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #define BTN_DEBOUNCE 30
@@ -28,9 +32,25 @@
 #define CLICK_BTN BIT(1)
 #define PARENT_BTN (NEXT_BTN | CLICK_BTN)
 #define FPS 30
+#define SECONDS_PER_DAY 86400
+#define SPINNER_FRAME_PERIOD 350
+#define NUM_TIMEOUTS 6
+
+static inline uint32_t clock_seconds_since_midnight(uint8_t hr12, uint8_t min, uint8_t sec, bool pm)
+{
+	uint8_t hr24 = (uint8_t)(hr12 % 12) + (pm ? 12 : 0);
+	return (uint32_t)hr24 * 3600u + (uint32_t)min * 60u + sec;
+}
+
+static inline uint32_t clock_elapsed_since(uint32_t now_s, uint32_t start_s)
+{
+	return (now_s >= start_s) ? (now_s - start_s) : (SECONDS_PER_DAY - start_s) + now_s;
+}
 
 task_handle_t g_task_ui_h;
 static struct ui_widget *g_root_stack;
+static struct kernel_timer g_inactivity_timer;
+static struct kernel_timer g_spinner_timer;
 
 // Buttons
 enum ui_button { UI_BTN_HOME, UI_BTN_CLICK, UI_BTN_NEXT, UI_BTN_COUNT };
@@ -130,15 +150,14 @@ static struct {
 
 	uint16_t hour;
 	uint16_t minute;
-	uint16_t second;
 	uint16_t meridiem; // 0 = AM, 1 = PM
 	uint16_t month;
 	uint16_t day;
 	uint16_t year;
-	uint16_t timer_h;
-	uint16_t timer_m;
-	uint16_t timer_s;
+
 	bool timer_running;
+	uint32_t timer_base_s;
+	uint32_t timer_start_s;
 
 	char timer_display_buf[20];
 } g_clock_page;
@@ -202,19 +221,27 @@ static struct {
 
 static struct {
 	struct ui_widget *root;
-	struct ui_widget *manuf_name;
 	struct ui_widget *fw;
 	struct ui_widget *height;
 	struct ui_widget *weight;
+	struct ui_widget *timeout_row;
+	struct ui_widget *timeout_text;
+	struct ui_widget *timeout_btn;
+	struct ui_widget *timeout_btn_text;
 
 	char fw_buf[32];
 	char height_buf[32];
 	char weight_buf[32];
-} g_settings_page = {
-	.fw_buf = "Biowatch 0.0.0",
-	.height_buf = "Height:   170 cm",
-	.weight_buf = "Weight:    70 kg",
-};
+	uint32_t timeout_idx;
+	uint64_t timeouts[NUM_TIMEOUTS];
+	const char *timeout_bufs[NUM_TIMEOUTS];
+} g_settings_page = { .fw_buf = "Biowatch 0.0.0",
+					  .height_buf = "Height:   170 cm",
+					  .weight_buf = "Weight:    70 kg",
+					  .timeout_idx = 0,
+					  .timeouts = { 10ull * 1000, 30ull * 1000, 1ull * 60 * 1000, 10ull * 60 * 1000,
+									30ull * 60 * 1000, MAX_TIMEOUT },
+					  .timeout_bufs = { "10 s", "30 s", "1 min", "10 min", "30 min", "Never" } };
 
 static clock_field_desc_t g_clock_fields[] = {
 	{ &g_clock_page.hour_edit, FIELD_TYPE_INT, &g_clock_page.hour, 1, 12, "%02d", "12" },
@@ -237,6 +264,12 @@ static inline void repeat_btn(enum ui_button btn, uint32_t ms)
 	kernel_timer_start(&g_btn_timer[btn]);
 }
 
+static void power_off(void *user_data)
+{
+	(void)user_data;
+	kernel_task_notify(g_task_ui_h, UI_DISPLAY_OFF_NTF, NOTIFY_ACTION_SET_BITS);
+}
+
 static void btn_exti(void *user_data)
 {
 	enum ui_button btn = (enum ui_button)user_data;
@@ -245,14 +278,14 @@ static void btn_exti(void *user_data)
 	if (timer->active)
 		return;
 
-	KERNEL_ENTER_CRITICAL();
+	uint32_t key = KERNEL_ENTER_CRITICAL();
 	if (gpio_read_level(g_btn_pin[btn]) == 0) {
 		timer->ticks = BTN_DEBOUNCE;
 		kernel_timer_start(timer);
 	} else {
 		kernel_timer_stop(timer);
 	}
-	KERNEL_EXIT_CRITICAL();
+	KERNEL_EXIT_CRITICAL(key);
 }
 
 static void on_press(void *user_data)
@@ -262,13 +295,22 @@ static void on_press(void *user_data)
 	if (gpio_read_level(g_btn_pin[btn]) != 0)
 		return;
 
+	kernel_timer_start(&g_inactivity_timer);
 	kernel_task_notify(g_task_hap_h, HAPTICS_BUZZ_NTF, NOTIFY_ACTION_SET_BITS);
+	if (!(kernel_event_get(&g_app_evt) & DISPLAY_ON_EVT)) {
+		kernel_task_notify(g_task_ui_h, UI_DISPLAY_ON_NTF, NOTIFY_ACTION_SET_BITS);
+		return;
+	}
 
 	switch (btn) {
 	case UI_BTN_HOME:
-		ui_change_page(ROOT_IDX_APP_HOME);
-		ui_widget_set_active_child(g_app_page.header_stack, 0);
-		request_draw();
+		if (ui_widget_get_active_child_idx(g_root_stack) != ROOT_IDX_APP_HOME) {
+			ui_change_page(ROOT_IDX_APP_HOME);
+			ui_widget_set_active_child_idx(g_app_page.header_stack, 0);
+			request_draw();
+		} else {
+			power_off(NULL);
+		}
 		break;
 
 	case UI_BTN_CLICK:
@@ -278,6 +320,9 @@ static void on_press(void *user_data)
 			sel == g_clock_page.day_edit || sel == g_clock_page.month_edit ||
 			sel == g_clock_page.year_edit) {
 			g_btn_timer[UI_BTN_CLICK].ticks = BTN_FAST_REPEAT_MS;
+			kernel_timer_start(&g_btn_timer[UI_BTN_CLICK]);
+		} else if (sel == g_settings_page.timeout_btn) {
+			g_btn_timer[UI_BTN_CLICK].ticks = BTN_REPEAT_MS;
 			kernel_timer_start(&g_btn_timer[UI_BTN_CLICK]);
 		}
 		request_draw();
@@ -294,13 +339,54 @@ static void on_press(void *user_data)
 	}
 }
 
-static void rtc_wut_1hz_isr(void)
+static void rtc_alarm_isr(void)
 {
-	kernel_task_notify(g_task_ui_h, UI_WUT_1HZ_NTF, NOTIFY_ACTION_SET_BITS);
+	kernel_task_notify(g_task_ui_h, UI_UPDATE_CLOCK_NTF, NOTIFY_ACTION_SET_BITS);
+}
+
+static void sync_clock_alarm(void)
+{
+	uint32_t mask = 0;
+
+	if (kernel_event_get(&g_app_evt) & DISPLAY_ON_EVT) {
+		mask |= RTC_ALARM_MASK_HOUR | RTC_ALARM_MASK_MIN;
+		if (g_clock_page.timer_running)
+			mask |= RTC_ALARM_MASK_SEC;
+	}
+
+	rtc_enable_alarm(12, 0, 0, false, mask, rtc_alarm_isr, 5);
+}
+
+static void spinner_timer_cb(void *user_data)
+{
+	(void)user_data;
+	kernel_task_notify(g_task_ui_h, UI_SPINNER_UPDATE_NTF, NOTIFY_ACTION_SET_BITS);
+}
+
+static void sync_spinner_timer(void)
+{
+	bool needs_spin = (g_ble_page.state == BLE_STATE_ADVERTISING) ||
+					  (g_vitals_page.measuring != VITALS_IDLE);
+
+	if (needs_spin && (kernel_event_get(&g_app_evt) & DISPLAY_ON_EVT)) {
+		if (!g_spinner_timer.active)
+			kernel_timer_start(&g_spinner_timer);
+	} else {
+		if (g_spinner_timer.active)
+			kernel_timer_stop(&g_spinner_timer);
+	}
 }
 
 static void task_ui_init(void)
 {
+	g_inactivity_timer.type = KERNEL_TIMER_ONE_SHOT;
+	g_inactivity_timer.ticks = g_settings_page.timeouts[g_settings_page.timeout_idx];
+	g_inactivity_timer.callback = power_off;
+
+	g_spinner_timer.type = KERNEL_TIMER_PERIODIC;
+	g_spinner_timer.ticks = SPINNER_FRAME_PERIOD;
+	g_spinner_timer.callback = spinner_timer_cb;
+
 	for (int btn = 0; btn < UI_BTN_COUNT; btn++) {
 		g_btn_timer[btn].type = KERNEL_TIMER_ONE_SHOT;
 		g_btn_timer[btn].ticks = BTN_DEBOUNCE;
@@ -308,7 +394,7 @@ static void task_ui_init(void)
 		g_btn_timer[btn].user_data = (void *)btn;
 	}
 
-	rtc_enable_wut(1, rtc_wut_1hz_isr, 4);
+	sync_clock_alarm();
 }
 
 static void build_startup_page(void)
@@ -325,14 +411,14 @@ static void build_startup_page(void)
 static void on_select_app(void *user_data)
 {
 	enum header_stack_idx app_id = (enum header_stack_idx)user_data;
-	ui_widget_set_active_child(g_app_page.header_stack, app_id);
+	ui_widget_set_active_child_idx(g_app_page.header_stack, app_id);
 	request_draw();
 }
 
 static void on_click_app(void *user_data)
 {
 	enum header_stack_idx app_id = (enum header_stack_idx)user_data;
-	ui_widget_set_active_child(g_root_stack, ROOT_IDX_CLOCK + app_id);
+	ui_widget_set_active_child_idx(g_root_stack, ROOT_IDX_CLOCK + app_id);
 	ui_unselect();
 	request_draw();
 }
@@ -443,9 +529,17 @@ static void build_app_page(void)
 
 static void sync_rtc_from_clock_val(void)
 {
-	bool pm = (g_clock_page.meridiem != 0);
-	rtc_set_time((uint8_t)g_clock_page.hour, (uint8_t)g_clock_page.minute,
-				 (uint8_t)g_clock_page.second, pm);
+	uint8_t hr, min, sec;
+	bool pm;
+	rtc_get_time(&hr, &min, &sec, &pm);
+	(void)hr;
+	(void)min;
+	(void)pm;
+
+	bool new_pm = (g_clock_page.meridiem != 0);
+	uint8_t new_hr = (uint8_t)(g_clock_page.hour % 12);
+
+	rtc_set_time(new_hr, (uint8_t)g_clock_page.minute, sec, new_pm);
 
 	uint8_t yr_2digit = (uint8_t)(g_clock_page.year % 100);
 	uint8_t wd =
@@ -462,11 +556,11 @@ static void read_rtc_to_clock_val(void)
 	uint8_t yr = 26, mth = 1, dte = 1, wd = 1;
 
 	rtc_get_time(&hr, &min, &sec, &pm);
+	(void)sec;
 	rtc_get_date(&yr, &mth, &dte, &wd);
 
 	g_clock_page.hour = (hr == 0) ? 12 : hr;
 	g_clock_page.minute = min;
-	g_clock_page.second = sec;
 	g_clock_page.meridiem = pm ? 1 : 0;
 	g_clock_page.month = (mth >= 1 && mth <= 12) ? mth : 1;
 	g_clock_page.day = (dte >= 1 && dte <= 31) ? dte : 1;
@@ -486,16 +580,27 @@ static void read_rtc_to_clock_val(void)
 	update_clock_header_text();
 }
 
+static uint32_t timer_elapsed_seconds(void)
+{
+	if (!g_clock_page.timer_running)
+		return g_clock_page.timer_base_s;
+
+	uint8_t hr, min, sec;
+	bool pm;
+	rtc_get_time(&hr, &min, &sec, &pm);
+	uint32_t now_s = clock_seconds_since_midnight(hr, min, sec, pm);
+
+	return g_clock_page.timer_base_s + clock_elapsed_since(now_s, g_clock_page.timer_start_s);
+}
+
 static void update_timer_display(void)
 {
-	bw_str_format(g_clock_page.timer_display_buf, sizeof(g_clock_page.timer_display_buf),
-				  "%02u:%02u:%02u", g_clock_page.timer_h, g_clock_page.timer_m,
-				  g_clock_page.timer_s);
+	uint32_t total = timer_elapsed_seconds();
 
-	if (g_clock_page.timer_display) {
-		ui_widget_update_text(g_clock_page.timer_display, g_clock_page.timer_display_buf);
-		request_draw();
-	}
+	bw_str_format(g_clock_page.timer_display_buf, sizeof(g_clock_page.timer_display_buf),
+				  "%02u:%02u:%02u", (total / 3600) % 100, (total / 60) % 60, total % 60);
+
+	ui_widget_update_text(g_clock_page.timer_display, g_clock_page.timer_display_buf);
 }
 
 static void on_clock_field_click(void *user_data)
@@ -520,7 +625,6 @@ static void on_clock_field_click(void *user_data)
 
 	ui_widget_update_text(*f->widget_ref, f->buf);
 
-	// Re-clamp day if month/year adjusted
 	if (f->widget_ref == &g_clock_page.month_edit || f->widget_ref == &g_clock_page.year_edit) {
 		uint8_t dynamic_max = get_max_days(g_clock_page.year, g_clock_page.month);
 		if (g_clock_page.day > dynamic_max) {
@@ -543,18 +647,41 @@ static void on_clock_field_click(void *user_data)
 static void timer_display_on_click(void *user_data)
 {
 	(void)user_data;
-	g_clock_page.timer_h = 0;
-	g_clock_page.timer_m = 0;
-	g_clock_page.timer_s = 0;
+
+	g_clock_page.timer_base_s = 0;
+
+	if (g_clock_page.timer_running) {
+		uint8_t hr, min, sec;
+		bool pm;
+		rtc_get_time(&hr, &min, &sec, &pm);
+		g_clock_page.timer_start_s = clock_seconds_since_midnight(hr, min, sec, pm);
+	}
+
 	update_timer_display();
 }
 
 static void timer_toggle_btn_on_click(void *user_data)
 {
 	(void)user_data;
+
+	uint8_t hr, min, sec;
+	bool pm;
+	rtc_get_time(&hr, &min, &sec, &pm);
+	uint32_t now_s = clock_seconds_since_midnight(hr, min, sec, pm);
+
 	g_clock_page.timer_running = !g_clock_page.timer_running;
+
+	if (g_clock_page.timer_running) {
+		g_clock_page.timer_start_s = now_s;
+	} else {
+		g_clock_page.timer_base_s += clock_elapsed_since(now_s, g_clock_page.timer_start_s);
+	}
+
+	sync_clock_alarm();
+
 	ui_widget_update_text(g_clock_page.timer_toggle_btn_text,
 						  g_clock_page.timer_running ? "STOP" : "START");
+	update_timer_display();
 	request_draw();
 }
 
@@ -565,7 +692,6 @@ static void build_clock_page(void)
 
 	g_clock_page.root = ui_widget_create_col(0x00, 2, 2, 1, false);
 
-	// Time row: HH : MM  AM/PM
 	g_clock_page.time_edit_row = ui_widget_create_row(0x00, 2, 1, 1, false);
 	g_clock_page.time_icon = ui_widget_create_image(&time_bmp, false, 2, false);
 	g_clock_page.hour_edit =
@@ -576,7 +702,6 @@ static void build_clock_page(void)
 	g_clock_page.meridiem_edit =
 		ui_widget_create_text(g_clock_fields[2].buf, &tamzen12b, true, 2, true);
 
-	// Date row: MM / DD / YYYY
 	g_clock_page.date_edit_row = ui_widget_create_row(0x00, 2, 1, 1, false);
 	g_clock_page.date_icon = ui_widget_create_image(&calendar_bmp, false, 2, false);
 	g_clock_page.month_edit =
@@ -587,13 +712,12 @@ static void build_clock_page(void)
 	g_clock_page.year_edit =
 		ui_widget_create_text(g_clock_fields[5].buf, &tamzen12b, true, 3, true);
 
-	// Timer row: [ICON]  HH:MM:SS  [START/STOP]
 	g_clock_page.timer_row = ui_widget_create_row(0x00, 2, 1, 1, false);
 	g_clock_page.timer_icon = ui_widget_create_image(&timer_bmp, false, 2, false);
 	g_clock_page.timer_display =
 		ui_widget_create_text(g_clock_page.timer_display_buf, &tamzen12b, true, 5, true);
-	g_clock_page.timer_toggle_btn =
-		ui_widget_create_button("START", &tamzen9, &g_clock_page.timer_toggle_btn_text, 3);
+	g_clock_page.timer_toggle_btn = ui_widget_create_row(0xFF, 1, 0, 3, true);
+	g_clock_page.timer_toggle_btn_text = ui_widget_create_text("START", &tamzen9, false, 1, false);
 
 	for (size_t i = 0; i < NUM_CLOCK_FIELDS; i++) {
 		if (*g_clock_fields[i].widget_ref) {
@@ -625,6 +749,7 @@ static void build_clock_page(void)
 	ui_container_add_child(g_clock_page.timer_row, g_clock_page.timer_icon);
 	ui_container_add_child(g_clock_page.timer_row, g_clock_page.timer_display);
 	ui_container_add_child(g_clock_page.timer_row, g_clock_page.timer_toggle_btn);
+	ui_container_add_child(g_clock_page.timer_toggle_btn, g_clock_page.timer_toggle_btn_text);
 }
 
 static void build_act_page(void)
@@ -652,24 +777,28 @@ static void build_act_page(void)
 	ui_container_add_child(g_act_page.root, g_act_page.calories);
 }
 
-static void on_bio_click(void *user_data)
+static void on_vitals_click(void *user_data)
 {
+	if (g_vitals_page.measuring == VITALS_MEASURING_HR ||
+		g_vitals_page.measuring == VITALS_MEASURING_SPO2)
+		return;
+
 	uint32_t ntf = (uint32_t)user_data;
 	kernel_task_notify(g_task_vitals_h, ntf, NOTIFY_ACTION_SET_BITS);
 
-	// Start loader animation on clicked vital
 	if (ntf == VITALS_READ_HR_NTF) {
 		g_vitals_page.measuring = VITALS_MEASURING_HR;
-		bw_str_format(g_vitals_page.hr_buf, sizeof(g_vitals_page.hr_buf), "...");
+		bw_str_format(g_vitals_page.hr_buf, sizeof(g_vitals_page.hr_buf), ".");
 		if (g_vitals_page.hr_text)
 			ui_widget_update_text(g_vitals_page.hr_text, g_vitals_page.hr_buf);
 	} else if (ntf == VITALS_READ_SPO2_NTF) {
 		g_vitals_page.measuring = VITALS_MEASURING_SPO2;
-		bw_str_format(g_vitals_page.spo2_buf, sizeof(g_vitals_page.spo2_buf), "...");
+		bw_str_format(g_vitals_page.spo2_buf, sizeof(g_vitals_page.spo2_buf), ".");
 		if (g_vitals_page.spo2_text)
 			ui_widget_update_text(g_vitals_page.spo2_text, g_vitals_page.spo2_buf);
 	}
 
+	sync_spinner_timer();
 	request_draw();
 }
 
@@ -681,13 +810,14 @@ static void build_vitals_page(void)
 	g_vitals_page.root = ui_widget_create_col(0x00, 2, 2, 1, false);
 
 	g_vitals_page.hr_btn = ui_widget_create_row(0xFF, 2, 0, 1, true);
-	ui_widget_set_callbacks(g_vitals_page.hr_btn, NULL, on_bio_click, (void *)VITALS_READ_HR_NTF);
+	ui_widget_set_callbacks(g_vitals_page.hr_btn, NULL, on_vitals_click,
+							(void *)VITALS_READ_HR_NTF);
 	g_vitals_page.hr_icon = ui_widget_create_image(&heart_rate_bmp, false, 1, false);
 	g_vitals_page.hr_text =
 		ui_widget_create_text(g_vitals_page.hr_buf, &tamzen12b, false, 1, false);
 
 	g_vitals_page.spo2_btn = ui_widget_create_row(0xFF, 2, 0, 1, true);
-	ui_widget_set_callbacks(g_vitals_page.spo2_btn, NULL, on_bio_click,
+	ui_widget_set_callbacks(g_vitals_page.spo2_btn, NULL, on_vitals_click,
 							(void *)VITALS_READ_SPO2_NTF);
 	g_vitals_page.spo2_icon = ui_widget_create_image(&spo2_bmp, false, 1, false);
 	g_vitals_page.spo2_text =
@@ -745,22 +875,40 @@ static void build_ble_page(void)
 	ui_container_add_child(g_ble_page.root, g_ble_page.status);
 }
 
+static void on_update_timeout(void *user_data)
+{
+	(void)user_data;
+	g_settings_page.timeout_idx = (g_settings_page.timeout_idx + 1) % NUM_TIMEOUTS;
+	ui_widget_update_text(g_settings_page.timeout_btn_text,
+						  g_settings_page.timeout_bufs[g_settings_page.timeout_idx]);
+	g_inactivity_timer.ticks = g_settings_page.timeouts[g_settings_page.timeout_idx];
+	kernel_timer_start(&g_inactivity_timer);
+	request_draw();
+}
+
 static void build_settings_page(void)
 {
 	g_settings_page.root = ui_widget_create_col(0x00, 2, 2, 1, false);
-	g_settings_page.manuf_name =
-		ui_widget_create_text(g_app_settings.manuf_name, &tamzen12b, true, 1, false);
 	g_settings_page.fw = ui_widget_create_text(g_settings_page.fw_buf, &tamzen12b, true, 1, false);
 	g_settings_page.height =
-		ui_widget_create_text(g_settings_page.height_buf, &tamzen12b, true, 1, false);
+		ui_widget_create_text(g_settings_page.height_buf, &tamzen9, true, 1, false);
 	g_settings_page.weight =
-		ui_widget_create_text(g_settings_page.weight_buf, &tamzen12b, true, 1, false);
+		ui_widget_create_text(g_settings_page.weight_buf, &tamzen9, true, 1, false);
+	g_settings_page.timeout_row = ui_widget_create_row(0x0, 0, 1, 1, false);
+	g_settings_page.timeout_text = ui_widget_create_text("Timeout:", &tamzen9, false, 1, false);
+	g_settings_page.timeout_btn = ui_widget_create_row(0xFF, 1, 0, 1, true);
+	ui_widget_set_callbacks(g_settings_page.timeout_btn, NULL, on_update_timeout, NULL);
+	g_settings_page.timeout_btn_text = ui_widget_create_text(
+		g_settings_page.timeout_bufs[g_settings_page.timeout_idx], &tamzen9, false, 1, false);
 
 	ui_container_add_child(g_root_stack, g_settings_page.root);
-	ui_container_add_child(g_settings_page.root, g_settings_page.manuf_name);
 	ui_container_add_child(g_settings_page.root, g_settings_page.fw);
 	ui_container_add_child(g_settings_page.root, g_settings_page.height);
 	ui_container_add_child(g_settings_page.root, g_settings_page.weight);
+	ui_container_add_child(g_settings_page.root, g_settings_page.timeout_row);
+	ui_container_add_child(g_settings_page.timeout_row, g_settings_page.timeout_text);
+	ui_container_add_child(g_settings_page.timeout_row, g_settings_page.timeout_btn);
+	ui_container_add_child(g_settings_page.timeout_btn, g_settings_page.timeout_btn_text);
 }
 
 static void build_all_pages(void)
@@ -812,28 +960,6 @@ static void update_act_display(void)
 	bw_str_format(g_app_page.act_buf, sizeof(g_app_page.act_buf), "%s    %s", g_act_page.steps_buf,
 				  g_act_page.dist_buf);
 	ui_widget_update_text(g_app_page.activity_header, g_app_page.act_buf);
-
-	request_draw();
-}
-
-static void update_vitals_spinner(void)
-{
-	if (g_vitals_page.measuring == VITALS_IDLE)
-		return;
-
-	static const char *spin_dots[] = { ".", "..", "...", "...." };
-	static uint8_t spin_frame = 0;
-	spin_frame = (spin_frame + 1) % 4;
-
-	if (g_vitals_page.measuring == VITALS_MEASURING_HR && g_vitals_page.hr_text) {
-		bw_str_format(g_vitals_page.hr_buf, sizeof(g_vitals_page.hr_buf), "%s",
-					  spin_dots[spin_frame]);
-		ui_widget_update_text(g_vitals_page.hr_text, g_vitals_page.hr_buf);
-	} else if (g_vitals_page.measuring == VITALS_MEASURING_SPO2 && g_vitals_page.spo2_text) {
-		bw_str_format(g_vitals_page.spo2_buf, sizeof(g_vitals_page.spo2_buf), "%s",
-					  spin_dots[spin_frame]);
-		ui_widget_update_text(g_vitals_page.spo2_text, g_vitals_page.spo2_buf);
-	}
 }
 
 static void update_vitals_display(void)
@@ -849,10 +975,9 @@ static void update_vitals_display(void)
 			ui_widget_update_text(g_vitals_page.hr_text, g_vitals_page.hr_buf);
 	} else if (rec.type == VITALS_TYPE_SPO2) {
 		g_vitals_page.measuring = VITALS_IDLE;
-		int spo2x10 = (int)(rec.value.spo2_pct * 100.0f);
+		int spo2x10 = (int)(rec.value.spo2_pct * 10.0f);
 		bw_str_format(g_vitals_page.spo2_buf, sizeof(g_vitals_page.spo2_buf), "%d.%d %%",
 					  spo2x10 / 10, spo2x10 % 10);
-		BW_LOG("%s\n", g_vitals_page.spo2_buf);
 		if (g_vitals_page.spo2_text)
 			ui_widget_update_text(g_vitals_page.spo2_text, g_vitals_page.spo2_buf);
 	}
@@ -861,7 +986,7 @@ static void update_vitals_display(void)
 				  g_vitals_page.hr_buf, g_vitals_page.spo2_buf);
 	ui_widget_update_text(g_app_page.vitals_header, g_app_page.vitals_buf);
 
-	request_draw();
+	sync_spinner_timer();
 }
 
 static void update_weather_display(void)
@@ -886,24 +1011,66 @@ static void update_weather_display(void)
 	ui_widget_update_text(g_app_page.weather_header, g_app_page.weather_buf);
 
 	uint8_t brightness = MIN((uint32_t)rec.luxx100 * UINT8_MAX / UINT16_MAX + 50, 255);
-	display_set_brightness(brightness);
 
-	request_draw();
+	if (kernel_event_get(&g_app_evt) & DISPLAY_ON_EVT)
+		display_set_brightness(brightness);
 }
 
-static void update_ble_spinner(void)
+// Executes solely in task_ui context
+static void update_spinners(void)
 {
-	if (g_ble_page.state != BLE_STATE_ADVERTISING)
-		return;
-
 	static const char *spin_dots[] = { ".", "..", "...", "...." };
 	static uint8_t spin_frame = 0;
 	spin_frame = (spin_frame + 1) % 4;
 
-	bw_str_format(g_ble_page.status_buf, sizeof(g_ble_page.status_buf), "Advertising%s",
-				  spin_dots[spin_frame]);
-	ui_widget_update_text(g_ble_page.status, g_ble_page.status_buf);
-	ui_widget_update_text(g_app_page.ble_header, g_ble_page.status_buf);
+	if (g_vitals_page.measuring == VITALS_MEASURING_HR && g_vitals_page.hr_text) {
+		bw_str_format(g_vitals_page.hr_buf, sizeof(g_vitals_page.hr_buf), "%s",
+					  spin_dots[spin_frame]);
+		ui_widget_update_text(g_vitals_page.hr_text, g_vitals_page.hr_buf);
+	} else if (g_vitals_page.measuring == VITALS_MEASURING_SPO2 && g_vitals_page.spo2_text) {
+		bw_str_format(g_vitals_page.spo2_buf, sizeof(g_vitals_page.spo2_buf), "%s",
+					  spin_dots[spin_frame]);
+		ui_widget_update_text(g_vitals_page.spo2_text, g_vitals_page.spo2_buf);
+	}
+
+	if (g_ble_page.state == BLE_STATE_ADVERTISING) {
+		bw_str_format(g_ble_page.status_buf, sizeof(g_ble_page.status_buf), "Advertising%s",
+					  spin_dots[spin_frame]);
+		ui_widget_update_text(g_ble_page.status, g_ble_page.status_buf);
+		ui_widget_update_text(g_app_page.ble_header, g_ble_page.status_buf);
+	}
+
+	sync_spinner_timer();
+}
+
+static void update_ble_display(void)
+{
+	switch (g_ble_page.state) {
+	case BLE_STATE_CONNECTED:
+		bw_str_format(g_ble_page.btn_buf, sizeof(g_ble_page.btn_buf), "%s", "Disable BLE");
+		bw_str_format(g_ble_page.status_buf, sizeof(g_ble_page.status_buf), "%s", "Connected");
+		ui_widget_update_text(g_ble_page.status, g_ble_page.status_buf);
+		ui_widget_update_text(g_app_page.ble_header, g_ble_page.status_buf);
+		break;
+
+	case BLE_STATE_ADVERTISING:
+		bw_str_format(g_ble_page.btn_buf, sizeof(g_ble_page.btn_buf), "%s", "Disable BLE");
+		// Spinner will populate status_buf directly
+		break;
+
+	case BLE_STATE_OFF:
+		bw_str_format(g_ble_page.btn_buf, sizeof(g_ble_page.btn_buf), "%s", "Enable BLE");
+		bw_str_format(g_ble_page.status_buf, sizeof(g_ble_page.status_buf), "%s", "Not Connected");
+		ui_widget_update_text(g_ble_page.status, g_ble_page.status_buf);
+		ui_widget_update_text(g_app_page.ble_header, g_ble_page.status_buf);
+		break;
+
+	default:
+		break;
+	}
+
+	ui_widget_update_text(g_ble_page.conn_btn_text, g_ble_page.btn_buf);
+	sync_spinner_timer();
 }
 
 static void update_settings_display(void)
@@ -919,35 +1086,62 @@ static void update_settings_display(void)
 	bw_str_format(g_settings_page.weight_buf, sizeof(g_settings_page.weight_buf),
 				  "Weight:      %d kg", g_app_settings.weight_kg);
 	ui_widget_update_text(g_settings_page.weight, g_settings_page.weight_buf);
-
-	request_draw();
 }
 
 void task_ui(void *user_data)
 {
 	(void)user_data;
 
+	uint32_t ntf = 0;
+	uint32_t pending_ntf = 0;
 	ui_init();
+	kernel_event_set(&g_app_evt, DISPLAY_ON_EVT);
 	task_ui_init();
-
-	read_rtc_to_clock_val();
-
 	build_all_pages();
-	ui_widget_set_active_child(g_root_stack, ROOT_IDX_APP_HOME);
+	ui_widget_set_active_child_idx(g_root_stack, ROOT_IDX_APP_HOME);
 	ui_draw();
-	kernel_task_delay(1000);
+	read_rtc_to_clock_val();
+	kernel_timer_start(&g_inactivity_timer);
 
 	while (1) {
-		uint32_t ntf = 0;
-		kernel_task_notify_wait(0, 0xFFFFFFFF, &ntf, MAX_TIMEOUT);
+		kernel_task_notify_wait(0, UINT32_MAX, &ntf, MAX_TIMEOUT);
 
-		if (ntf & UI_WUT_1HZ_NTF) {
+		if (ntf & UI_DISPLAY_ON_NTF) {
+			display_power_on();
+			kernel_event_set(&g_app_evt, DISPLAY_ON_EVT);
+			sync_clock_alarm();
+			sync_spinner_timer();
+			ntf |= UI_UPDATE_CLOCK_NTF;
+		}
+
+		if (!(kernel_event_get(&g_app_evt) & DISPLAY_ON_EVT)) {
+			pending_ntf |= ntf;
+			continue;
+		}
+		ntf |= pending_ntf;
+		pending_ntf = 0;
+
+		if (ntf & UI_DISPLAY_OFF_NTF) {
+			if ((ui_widget_get_active_child_idx(g_root_stack) == ROOT_IDX_VITALS &&
+				 g_vitals_page.measuring != VITALS_IDLE) ||
+				(ui_widget_get_active_child_idx(g_root_stack) == ROOT_IDX_CLOCK &&
+				 g_clock_page.timer_running)) {
+				kernel_timer_start(&g_inactivity_timer);
+			} else {
+				display_power_off();
+				kernel_event_clear(&g_app_evt, DISPLAY_ON_EVT);
+				kernel_timer_stop(&g_inactivity_timer);
+				sync_clock_alarm();
+				sync_spinner_timer();
+			}
+		}
+
+		if (ntf & UI_UPDATE_CLOCK_NTF) {
 			uint8_t hr, min, sec;
 			bool pm;
 			rtc_get_time(&hr, &min, &sec, &pm);
 
-			// On next day start a new record
-			if (hr == 12 && min == 0 && sec == 0 && !pm)
+			if (hr == 0 && min == 0 && sec == 0 && !pm)
 				kernel_task_notify(g_task_act_h, ACT_NEW_REC_NTF, NOTIFY_ACTION_SET_BITS);
 
 			uint16_t new_hr = (hr == 0) ? 12 : hr;
@@ -958,70 +1152,57 @@ void task_ui(void *user_data)
 				read_rtc_to_clock_val();
 			}
 
-			if (g_clock_page.timer_running) {
-				g_clock_page.timer_s++;
-				if (g_clock_page.timer_s >= 60) {
-					g_clock_page.timer_s = 0;
-					g_clock_page.timer_m++;
-					if (g_clock_page.timer_m >= 60) {
-						g_clock_page.timer_m = 0;
-						g_clock_page.timer_h = (g_clock_page.timer_h + 1) % 100;
-					}
-				}
+			if (g_clock_page.timer_running)
 				update_timer_display();
-			}
 
-			update_vitals_spinner();
-			update_ble_spinner();
-			request_draw();
+			ntf |= UI_DRAW_NTF;
 		}
 
-		if (ntf & UI_ACT_CHANGED_NTF)
+		if (ntf & UI_SPINNER_UPDATE_NTF) {
+			update_spinners();
+			ntf |= UI_DRAW_NTF;
+		}
+
+		if (ntf & UI_ACT_CHANGED_NTF) {
 			update_act_display();
+			ntf |= UI_DRAW_NTF;
+		}
 
 		if (ntf & UI_VIT_CHANGED_NTF) {
 			kernel_task_notify(g_task_hap_h, HAPTICS_VIB_NTF, NOTIFY_ACTION_SET_BITS);
 			update_vitals_display();
+			ntf |= UI_DRAW_NTF;
 		}
 
-		if (ntf & UI_ENV_CHANGED_NTF)
+		if (ntf & UI_ENV_CHANGED_NTF) {
 			update_weather_display();
+			ntf |= UI_DRAW_NTF;
+		}
 
 		if (ntf & UI_BLE_CONNECTED_NTF) {
 			g_ble_page.state = BLE_STATE_CONNECTED;
 			kernel_task_notify(g_task_hap_h, HAPTICS_VIB_NTF, NOTIFY_ACTION_SET_BITS);
-			bw_str_format(g_ble_page.status_buf, sizeof(g_ble_page.status_buf), "%s", "Connected");
-			ui_widget_update_text(g_ble_page.status, g_ble_page.status_buf);
-			ui_widget_update_text(g_app_page.ble_header, g_ble_page.status_buf);
-			bw_str_format(g_ble_page.btn_buf, sizeof(g_ble_page.btn_buf), "%s", "Disable BLE");
-			ui_widget_update_text(g_ble_page.conn_btn_text, g_ble_page.btn_buf);
-			request_draw();
+			update_ble_display();
+			ntf |= UI_DRAW_NTF;
 		}
 
 		if (ntf & UI_BLE_ADVERTISING_NTF) {
 			g_ble_page.state = BLE_STATE_ADVERTISING;
-			bw_str_format(g_ble_page.btn_buf, sizeof(g_ble_page.btn_buf), "%s", "Disable BLE");
-			ui_widget_update_text(g_ble_page.conn_btn_text, g_ble_page.btn_buf);
-			bw_str_format(g_ble_page.status_buf, sizeof(g_ble_page.status_buf), "%s",
-						  "Advertising.");
-			ui_widget_update_text(g_ble_page.status, g_ble_page.status_buf);
-			ui_widget_update_text(g_app_page.ble_header, g_ble_page.status_buf);
-			request_draw();
+			update_ble_display();
+			update_spinners();
+			ntf |= UI_DRAW_NTF;
 		}
 
 		if (ntf & UI_BLE_DISCONNECTED_NTF) {
 			g_ble_page.state = BLE_STATE_OFF;
-			bw_str_format(g_ble_page.btn_buf, sizeof(g_ble_page.btn_buf), "%s", "Enable BLE");
-			ui_widget_update_text(g_ble_page.conn_btn_text, g_ble_page.btn_buf);
-			bw_str_format(g_ble_page.status_buf, sizeof(g_ble_page.status_buf), "%s",
-						  "Not Connected");
-			ui_widget_update_text(g_ble_page.status, g_ble_page.status_buf);
-			ui_widget_update_text(g_app_page.ble_header, g_ble_page.status_buf);
-			request_draw();
+			update_ble_display();
+			ntf |= UI_DRAW_NTF;
 		}
 
-		if (ntf & UI_SET_CHANGED_NTF)
+		if (ntf & UI_SET_CHANGED_NTF) {
 			update_settings_display();
+			ntf |= UI_DRAW_NTF;
+		}
 
 		if (ntf & UI_DRAW_NTF)
 			ui_draw();

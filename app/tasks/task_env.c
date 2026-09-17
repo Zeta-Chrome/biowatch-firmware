@@ -1,5 +1,8 @@
 #include "task_env.h"
+#include "app/tasks/tasks.h"
 #include "kernel/critical.h"
+#include "lib/status.h"
+#include "subsys/lpm/lpm.h"
 #include "task_ble.h"
 #include "task_ui.h"
 #include "drivers/rtc/rtc.h"
@@ -32,7 +35,7 @@ void task_env(void *user_data)
 {
 	(void)user_data;
 
-	uint32_t ntf;
+	uint32_t ntf, evt;
 	uint16_t ldr_adc;
 	uint32_t secs = 0;
 
@@ -59,6 +62,7 @@ void task_env(void *user_data)
 
 	while (1) {
 		// every 1 second
+		lpm_disable_mode(LPM_MODE_LP_SLEEP, "LDR");
 		adc_convert(&handle);
 
 		// every 1 minutes
@@ -73,25 +77,40 @@ void task_env(void *user_data)
 			temp_count++;
 		}
 
-		if (kernel_task_notify_wait(0, 0xFF, &ntf, 100) == STATUS_OK && ntf & ADC_SUCCESS_NTF) {
+		if (kernel_task_notify_wait(0, 0xFF, &ntf, 10) == STATUS_OK && ntf & ADC_SUCCESS_NTF) {
 			g_current_env.luxx100 = (uint16_t)((float)ldr_adc * 16.11328125f);
 			luxx100_sum += g_current_env.luxx100;
 			lux_count++;
 			kernel_task_notify(g_task_ui_h, UI_ENV_CHANGED_NTF, NOTIFY_ACTION_SET_BITS);
 		}
+		lpm_enable_mode(LPM_MODE_LP_SLEEP, "LDR");
 
 		// Every 10 mintues
-		if (secs % 600 == 0) {
+		if (secs >= 600) {
 			struct env_record rec = { .timestamp = rtc_get_timestamp(),
 									  .rhx100 = rhx100_sum / temp_count,
 									  .tempx100 = (int16_t)(tempx100_sum / temp_count),
 									  .luxx100 = luxx100_sum / lux_count };
 			kernel_mqueue_overwrite(&g_env_mqueue, &rec);
 			kernel_task_notify(g_task_ble_h, BLE_ENV_CHANGED_NTF, NOTIFY_ACTION_SET_BITS);
+
+			// Reset accumulators for the next 10-minute window
+			secs = 0;
+			rhx100_sum = 0;
+			tempx100_sum = 0;
+			temp_count = 0;
+			luxx100_sum = 0;
+			lux_count = 0;
 		}
 
-		secs++;
-		kernel_task_delay(1000);
+		enum bw_status status =
+			kernel_event_wait(&g_app_evt, DISPLAY_ON_EVT, &evt, false, true, 60000);
+		if (status == STATUS_OK) {
+			secs++;
+			kernel_task_delay(1000);
+		} else {
+			secs += 60;
+		}
 	}
 }
 
@@ -100,7 +119,7 @@ void task_env_get_latest_record(struct env_record *rec)
 	if (!rec)
 		return;
 
-	KERNEL_ENTER_CRITICAL();
+	uint32_t key = KERNEL_ENTER_CRITICAL();
 	*rec = g_current_env;
-	KERNEL_EXIT_CRITICAL();
+	KERNEL_EXIT_CRITICAL(key);
 }

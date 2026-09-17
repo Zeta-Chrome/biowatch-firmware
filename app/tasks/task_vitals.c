@@ -452,7 +452,7 @@ void task_vitals_get_latest_record(struct vitals_record *rec)
 	if (!rec)
 		return;
 
-	KERNEL_ENTER_CRITICAL();
+	uint32_t key = KERNEL_ENTER_CRITICAL();
 	*rec = g_current_vitals;
-	KERNEL_EXIT_CRITICAL();
+	KERNEL_EXIT_CRITICAL(key);
 }

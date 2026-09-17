@@ -147,17 +147,6 @@ struct ui_widget *ui_widget_create_stack(uint8_t fill, uint8_t padding, uint8_t 
 	return widget;
 }
 
-struct ui_widget *ui_widget_create_button(const char *str, const struct font *font,
-										  struct ui_widget **out_text, uint8_t flex)
-{
-	struct ui_widget *btn = ui_widget_create_col(0xFF, 1, 0, flex, true);
-	struct ui_widget *text = ui_widget_create_text(str, font, false, 1, false);
-	ui_container_add_child(btn, text);
-	if (out_text)
-		*out_text = text;
-	return btn;
-}
-
 void ui_container_add_child(struct ui_widget *widget, struct ui_widget *child)
 {
 	BW_ASSERT(widget->type == UI_WIDGET_TYPE_CONTAINER,
@@ -465,7 +454,7 @@ void ui_widget_update_text(struct ui_widget *widget, const char *str)
 	set_widget_dirty(widget);
 }
 
-void ui_widget_set_active_child(struct ui_widget *widget, uint8_t active_child_idx)
+void ui_widget_set_active_child_idx(struct ui_widget *widget, uint8_t active_child_idx)
 {
 	BW_ASSERT(widget->type == UI_WIDGET_TYPE_CONTAINER &&
 				  widget->container->layout == UI_LAYOUT_STACK,
@@ -478,4 +467,9 @@ void ui_widget_set_active_child(struct ui_widget *widget, uint8_t active_child_i
 		widget->container->child_sel_tail = active_child->container->child_sel_tail;
 	}
 	set_widget_dirty(widget);
+}
+
+uint8_t ui_widget_get_active_child_idx(struct ui_widget *widget)
+{
+	return widget->container->active_child;
 }

@@ -1,11 +1,11 @@
 #include "kernel/critical.h"
+#include "kernel/sync/event.h"
 #include "task_ble.h"
 #include "task_ui.h"
 #include "arm_math.h"
 #include "drivers/rtc/rtc.h"
 #include "drivers/sensor/imu/imu.h"
 #include "drivers/sensor/imu/imu_regs.h"
-#include "drivers/systick/systick.h"
 #include "kernel/kernel.h"
 #include "kernel/sync/mqueue.h"
 #include "kernel/task/task.h"
@@ -34,7 +34,7 @@ struct kernel_timer g_inactive_timer;
 static struct {
 	float acc_mag_buf[IMU_BUF_CAPACITY];
 	uint16_t acc_mag_cnt;
-	uint32_t last_step_time_ms;
+	uint64_t last_step_time_ms;
 	bool have_last_step;
 } g_act_metrics;
 
@@ -70,7 +70,7 @@ static void act_metrics_on_step()
 	imu_read_step_cnt(&g_current_act.steps);
 
 	// Use Shin & Park algorithm for estimating step length
-	uint32_t ms = systick_millis();
+	uint64_t ms = kernel_timer_ms();
 	uint32_t dt_ms = ms - g_act_metrics.last_step_time_ms;
 	g_act_metrics.last_step_time_ms = ms;
 
@@ -125,7 +125,6 @@ void task_act(void *user_data)
 	g_inactive_timer.type = KERNEL_TIMER_ONE_SHOT;
 	g_inactive_timer.ticks = MAX_INACTIVITY_PERIOD;
 	g_inactive_timer.callback = act_metrics_reset;
-	kernel_timer_register(&g_inactive_timer);
 	kernel_mqueue_init(&g_act_mqueue, g_act_buf, ACT_QUEUE_CAPACITY, sizeof(struct act_record));
 
 	enum bw_status status;
@@ -146,6 +145,7 @@ void task_act(void *user_data)
 	uint8_t int_status[4];
 	while (1) {
 		kernel_task_notify_wait(0, 0xFFFFFFFFu, &ntf, MAX_TIMEOUT);
+		imu_enable_nomo_int();
 
 		if (ntf & IMU_INT_NTF) {
 			status = imu_read_int_status(int_status);
@@ -159,6 +159,7 @@ void task_act(void *user_data)
 			}
 			if (int_status[1] & IMU_INT_ST1_NOMO_Msk) {
 				act_metrics_reset(NULL); // 5 seconds of inactivity = reset
+				imu_disable_nomo_int();
 			}
 			if (int_status[1] & IMU_INT_ST1_DRDY_Msk)
 				act_metrics_add_acc();
@@ -180,7 +181,7 @@ void task_act_get_latest_record(struct act_record *rec)
 	if (!rec)
 		return;
 
-	KERNEL_ENTER_CRITICAL();
+	uint32_t key = KERNEL_ENTER_CRITICAL();
 	*rec = g_current_act;
-	KERNEL_EXIT_CRITICAL();
+	KERNEL_EXIT_CRITICAL(key);
 }

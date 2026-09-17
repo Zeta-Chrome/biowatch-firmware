@@ -7,6 +7,7 @@
 #include "lib/status.h"
 #include "oxim.h"
 #include "oxim_regs.h"
+#include "subsys/lpm/lpm.h"
 #include <stddef.h>
 
 #define OXIM_ADDR 0x57
@@ -45,7 +46,8 @@ static void on_i2c_callback(enum bw_status status, void *user_data)
 		kernel_event_set(&g_event, EVENT_OK);
 	} else if (status == STATUS_I2C_REPEATED_START) {
 		void (*func_callback)(void) = user_data;
-		func_callback();
+		if (func_callback)
+			func_callback();
 	} else if (status == STATUS_I2C_NACKF) {
 		BW_LOG("NACK after %d bytes remaining\n", g_i2c_h.remaining);
 		kernel_event_set(&g_event, EVENT_NACK);
@@ -55,20 +57,22 @@ static void on_i2c_callback(enum bw_status status, void *user_data)
 	}
 }
 
-static enum bw_status transmit_and_wait(uint8_t *buf, uint8_t len, bool repeat, uint32_t timeout,
+static enum bw_status transmit_and_wait(uint8_t *buf, uint8_t len, bool repeat, uint64_t timeout,
 										void *user_data)
 {
 	uint32_t evt;
+	enum bw_status status;
 
+	i2c_bus_lock(g_i2c_h.perip);
 	g_i2c_h.buf = buf;
 	g_i2c_h.len = len;
 	g_i2c_h.repeat = repeat;
 	g_i2c_h.user_data = user_data;
-
-	i2c_bus_lock(g_i2c_h.perip);
+	lpm_disable_mode(LPM_MODE_LP_SLEEP, "OXIM");
 	i2c_transmit(&g_i2c_h);
-	enum bw_status status =
+	status =
 		kernel_event_wait(&g_event, EVENT_OK | EVENT_NACK | EVENT_ERR, &evt, true, false, timeout);
+	lpm_enable_mode(LPM_MODE_LP_SLEEP, "OXIM");
 	i2c_bus_unlock(g_i2c_h.perip);
 
 	if (status == STATUS_TIMEOUT || (evt & (EVENT_NACK | EVENT_ERR))) {

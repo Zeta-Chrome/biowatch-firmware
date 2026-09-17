@@ -1,10 +1,14 @@
 #include "display.h"
+#include "biowatch/bsp.h"
 #include "display_cmds.h"
+#include "drivers/gpio/gpio.h"
 #include "drivers/i2c/i2c.h"
+#include "drivers/i2c/i2c_bus.h"
 #include "kernel/sync/event.h"
 #include "lib/containers/queue.h"
 #include "lib/status.h"
 #include "lib/utils.h"
+#include "subsys/lpm/lpm.h"
 #include <string.h>
 
 #define DISPLAY_ADDR 0x3C
@@ -16,31 +20,34 @@
 #define EVENT_CMD_FLUSH_SUCCESS BIT(4)
 #define EVENT_CMD_FLUSH_FAILURE BIT(5)
 
-// clang-format off
-static struct display_fb g_fb = {
-.buf = {
-DISPLAY_CTRL_CMD_ONLY,      
-DISPLAY_CMD_DISPLAY_OFF, 
-DISPLAY_CMD_CLOCK_DIVIDE, 0x80,
-DISPLAY_CMD_SET_MUX_RATIO, 0x3F,
-DISPLAY_CMD_SET_OFFSET, 0x0,
-DISPLAY_CMD_START_LINE,
-DISPLAY_CMD_SEG_REMAP_START_0,
-DISPLAY_CMD_SCAN_DIR_NORMAL,
-DISPLAY_CMD_SET_COM_PINS, 0x12,
-DISPLAY_CMD_SET_CONTRAST, 0x7F,
-DISPLAY_CMD_DISPLAY_GDDRAM,
-DISPLAY_CMD_NORMAL_DISPLAY, 
-DISPLAY_CMD_SET_PRECHARGE_PERIOD, 0xF1,
-DISPLAY_CMD_SET_COMH_DESELECT, 0x40,
-DISPLAY_CMD_CHARGE_PUMP, DISPLAY_CMD_EN_PUMP,
-DISPLAY_CMD_ADDR_MODE, 0x0,
-DISPLAY_CMD_DISPLAY_ON 
-},
-.cmd_len = 26, // 26 Init commands
-.num_pages = 0
-};
-// clang-format on
+static struct display_fb g_fb = { .buf = { DISPLAY_CTRL_CMD_ONLY,
+										   DISPLAY_CMD_DISPLAY_OFF,
+										   DISPLAY_CMD_CLOCK_DIVIDE,
+										   0x80,
+										   DISPLAY_CMD_SET_MUX_RATIO,
+										   0x3F,
+										   DISPLAY_CMD_SET_OFFSET,
+										   0x0,
+										   DISPLAY_CMD_START_LINE,
+										   DISPLAY_CMD_SEG_REMAP_START_0,
+										   DISPLAY_CMD_SCAN_DIR_NORMAL,
+										   DISPLAY_CMD_SET_COM_PINS,
+										   0x12,
+										   DISPLAY_CMD_SET_CONTRAST,
+										   0x7F,
+										   DISPLAY_CMD_DISPLAY_GDDRAM,
+										   DISPLAY_CMD_NORMAL_DISPLAY,
+										   DISPLAY_CMD_SET_PRECHARGE_PERIOD,
+										   0xF1,
+										   DISPLAY_CMD_SET_COMH_DESELECT,
+										   0x40,
+										   DISPLAY_CMD_CHARGE_PUMP,
+										   DISPLAY_CMD_EN_PUMP,
+										   DISPLAY_CMD_ADDR_MODE,
+										   0x0,
+										   DISPLAY_CMD_DISPLAY_ON },
+								  .cmd_len = 26, // 26 Init commands
+								  .num_pages = 0 };
 
 static struct event g_event;
 static struct i2c_handle g_i2c_h;
@@ -79,7 +86,7 @@ static void init_fb_cmds()
 void display_init(bool invert_x, bool invert_y)
 {
     enum bw_status status;
-
+    
     g_state = DISPLAY_STATE_UNINITIALIZED;
     
     queue_init(&g_cmd_queue, g_cmd_queue_buf, sizeof(g_cmd_queue_buf[0]), DISPLAY_CMD_RING_SZ);
@@ -89,16 +96,20 @@ void display_init(bool invert_x, bool invert_y)
     g_fb.buf[10] = invert_y ? DISPLAY_CMD_SCAN_DIR_REMAPPED : DISPLAY_CMD_SCAN_DIR_NORMAL;
     
     while (g_state == DISPLAY_STATE_UNINITIALIZED)
-    {
+    {       
         // DISPLAY initialization
         g_i2c_h.addr = DISPLAY_ADDR;
         g_i2c_h.buf = g_fb.buf;
         g_i2c_h.len = g_fb.cmd_len;
         g_i2c_h.callback = on_initialized;
+        i2c_bus_lock(I2C_PERIPH_3);
+        lpm_disable_mode(LPM_MODE_LP_SLEEP, "DISPLAY");
         i2c_transmit_dma(&g_i2c_h); 
     
         uint32_t evt;
         status = kernel_event_wait(&g_event, EVENT_INIT_SUCCESS | EVENT_INIT_FAILURE, &evt, true, false, 1000);
+        lpm_enable_mode(LPM_MODE_LP_SLEEP, "DISPLAY");
+        i2c_bus_unlock(I2C_PERIPH_3);
         if (status != STATUS_OK)
         {
             BW_LOG("Display exited with status: %d\n", status);
@@ -166,11 +177,15 @@ static void flush_cmd()
         g_i2c_h.buf = cmd_buf->buf;
         g_i2c_h.len = cmd_buf->len;
         g_i2c_h.callback = on_cmd_flushed;
+        i2c_bus_lock(I2C_PERIPH_3);
+        lpm_disable_mode(LPM_MODE_LP_SLEEP, "DISPLAY");
         i2c_transmit_dma(&g_i2c_h);
 
         uint32_t evt;
         uint32_t wait_evts = EVENT_CMD_FLUSH_SUCCESS | EVENT_CMD_FLUSH_FAILURE;
         status = kernel_event_wait(&g_event, wait_evts, &evt, true, false, 1000);
+        lpm_enable_mode(LPM_MODE_LP_SLEEP, "DISPLAY");
+        i2c_bus_unlock(I2C_PERIPH_3);
         if (status != STATUS_OK)
         {
             BW_LOG("Display exited with status: %d\n", status);
@@ -496,14 +511,18 @@ void display_flush()
     
     g_fb.buf[11] = g_fb.num_pages - 1;
 
+    i2c_bus_lock(I2C_PERIPH_3);
     g_i2c_h.addr = DISPLAY_ADDR;
     g_i2c_h.buf = g_fb.buf;
     g_i2c_h.len = g_fb.cmd_len + g_fb.num_pages * DISPLAY_SCREEN_W;
     g_i2c_h.callback = on_fb_flushed;
+    lpm_disable_mode(LPM_MODE_LP_SLEEP, "DISPLAY");
     i2c_transmit_dma(&g_i2c_h);
     
     uint32_t event_bit;
     status = kernel_event_wait(&g_event, EVENT_FLUSH_SUCCESS | EVENT_FLUSH_FAILURE, &event_bit, true, false, 1000);
+    lpm_enable_mode(LPM_MODE_LP_SLEEP, "DISPLAY");
+    i2c_bus_unlock(I2C_PERIPH_3);
     if (status != STATUS_OK)
     {
         BW_LOG("Display exited with status: %d\n", status);
@@ -514,6 +533,7 @@ void display_flush()
     {
         g_state = DISPLAY_STATE_READY;
         g_flush_pending = false;
+        g_retry_counter = 0;
         g_fb.num_pages = 0;
         flush_cmd(); // flush next command if available
     }
@@ -522,8 +542,9 @@ void display_flush()
         g_flush_pending = true;
         if (g_retry_counter++ < MAX_RETRY_COUNTER)
         {
-            BW_LOG("Display flush failed");
+            BW_LOG("Display flush failed\n");
             i2c_reset_dma(&g_i2c_h);
+            display_flush();
         }
         else
         {

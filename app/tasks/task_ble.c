@@ -15,8 +15,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#define FAST_ADV_PERIOD (20 * 1000)
-#define LP_ADV_PERIOD (5 * 60 * 1000)
+#define FAST_ADV_PERIOD ((uint64_t)(20 * 1000))
+#define LP_ADV_PERIOD ((uint64_t)(5 * 60 * 1000))
 
 #define BLE_SVC_ENVIRONMENT                             \
 	{                                                   \
@@ -204,8 +204,6 @@ void task_ble(void *user_data)
 							 .connection_evt_cb = connection_evt_cb,
 							 .disconnection_evt_cb = disconnection_evt_cb };
 	ble_init(&conf);
-
-	kernel_timer_register(&g_adv_timer);
 
 	while (1) {
 		uint32_t ntf;

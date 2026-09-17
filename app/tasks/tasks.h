@@ -2,6 +2,7 @@
 #define APP_TASKS_H
 
 #define IMU_RDY_EVT BIT(0)
+#define DISPLAY_ON_EVT BIT(1)
 
 // Task priorities
 #define PRIO_UI 1

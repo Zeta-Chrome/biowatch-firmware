@@ -42,12 +42,10 @@ void task_haptics(void *user_data)
 	// BUZZ init
 	struct gpio_conf conf = gpio_conf_output(PL_BUZZ_PIN, GPIO_SPEED_LOW);
 	gpio_init(&conf);
-	kernel_timer_register(&g_buzz_timer);
 
 	// VIB init
 	conf = gpio_conf_output(PL_VIB_PIN, GPIO_SPEED_LOW);
 	gpio_init(&conf);
-	kernel_timer_register(&g_vib_timer);
 
 	uint32_t ntf;
 	while (1) {

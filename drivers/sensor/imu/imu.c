@@ -10,6 +10,7 @@
 #include "kernel/task/task.h"
 #include "lib/status.h"
 #include "lib/utils.h"
+#include "subsys/lpm/lpm.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -57,11 +58,13 @@ static enum bw_status transact_and_wait(uint16_t len)
 	gpio_set_level(PL_IMU_CS, 0);
 
 	spi_bus_lock(g_spi_h.perip);
+	lpm_disable_mode(LPM_MODE_LP_SLEEP, "IMU");
 	spi_transact_dma(&g_spi_h);
 
 	uint32_t event_bit;
 	status = kernel_event_wait(&g_event, EVENT_OK | EVENT_MODF | EVENT_OVR | EVENT_ERR, &event_bit,
 							   true, false, 100);
+	lpm_enable_mode(LPM_MODE_LP_SLEEP, "IMU");
 	spi_bus_unlock(g_spi_h.perip);
 
 	gpio_set_level(PL_IMU_CS, 1);
@@ -79,19 +82,19 @@ static enum bw_status transact_and_wait(uint16_t len)
 static uint8_t encode_no_motion_dur(uint8_t duration_sec)
 {
 	if (duration_sec <= 20) {
-		uint8_t val = (uint8_t)(duration_sec * 100 / 128);
+		uint8_t val = (uint8_t)(DIVC(duration_sec * 100, 128));
 		if (val > 0)
 			val -= 1;
 		val &= 0x0F;
 		return val;
 	} else if (duration_sec <= 102) {
-		uint8_t val = (uint8_t)(duration_sec * 100 / 512);
+		uint8_t val = (uint8_t)(DIVC(duration_sec * 100, 512));
 		if (val >= 5)
 			val -= 5;
 		val &= 0x0F;
 		return (0x01 << 4) | val;
 	} else {
-		uint8_t val = (uint8_t)(duration_sec * 100 / 1024);
+		uint8_t val = (uint8_t)(DIVC(duration_sec * 100, 1024));
 		if (val >= 11)
 			val -= 11;
 		val &= 0x1F;

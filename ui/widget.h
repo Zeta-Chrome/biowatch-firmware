@@ -109,6 +109,7 @@ void ui_widget_invert(struct ui_widget *widget);
 void ui_widget_update_rect(struct ui_widget *widget, uint8_t fill);
 void ui_widget_update_image(struct ui_widget *widget, struct bmp *bmp);
 void ui_widget_update_text(struct ui_widget *widget, const char *str);
-void ui_widget_set_active_child(struct ui_widget *widget, uint8_t active_child_idx);
+void ui_widget_set_active_child_idx(struct ui_widget *widget, uint8_t active_child_idx);
+uint8_t ui_widget_get_active_child_idx(struct ui_widget *widget);
 
 #endif

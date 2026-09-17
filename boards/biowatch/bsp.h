@@ -33,6 +33,7 @@
 #define PL_NEXT_PIN PA8
 #define PL_CLICK_PIN PA9
 #define PL_HOME_PIN PA2
+#define PL_WKUP_PIN PWR_WKUP4
 
 void bsp_init();
 

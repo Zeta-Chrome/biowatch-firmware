@@ -15,16 +15,21 @@
 #include "lib/logger.h"
 #include "lib/utils.h"
 #include "stm32wb55xx.h"
+#include "subsys/lpm/lpm.h"
 #include <stddef.h>
 
 static void fault_init(void)
 {
-	SCB->SHCSR |=
-		(SCB_SHCSR_USGFAULTENA_Msk | SCB_SHCSR_BUSFAULTENA_Msk | SCB_SHCSR_MEMFAULTENA_Msk);
-	SCB->CCR |= SCB_CCR_DIV_0_TRP_Msk;
+	SET_FIELD(SCB->SHCSR,
+			  SCB_SHCSR_USGFAULTENA_Msk | SCB_SHCSR_BUSFAULTENA_Msk | SCB_SHCSR_MEMFAULTENA_Msk);
+	SET_FIELD(SCB->CCR, SCB_CCR_DIV_0_TRP_Msk);
 
 #ifdef DEBUG
-	SCnSCB->ACTLR |= SCnSCB_ACTLR_DISDEFWBUF_Msk;
+	lpm_disable_mode(LPM_MODE_STOP, "DEBUG"); // Debug logs from RTT fail in stop mode
+	// Disables write buffer
+	SET_FIELD(SCnSCB->ACTLR, SCnSCB_ACTLR_DISDEFWBUF_Msk); // (Imprecise error to precise error)
+	SET_FIELD(DBGMCU->CR,
+			  DBGMCU_CR_DBG_SLEEP_Msk | DBGMCU_CR_DBG_STOP_Msk | DBGMCU_CR_DBG_STANDBY_Msk);
 #endif
 }
 

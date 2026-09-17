@@ -15,7 +15,7 @@ void ui_init()
 
 void ui_change_page(uint8_t page)
 {
-	ui_widget_set_active_child(g_root_widget, page);
+	ui_widget_set_active_child_idx(g_root_widget, page);
 	ui_unselect();
 }
 

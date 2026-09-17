@@ -5,6 +5,7 @@
 #include "kernel/sync/event.h"
 #include "kernel/task/task.h"
 #include "lib/status.h"
+#include "subsys/lpm/lpm.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -32,16 +33,17 @@ static enum bw_status send_cmd(uint8_t msb, uint8_t lsb)
 {
 	enum bw_status status;
 
+	i2c_bus_lock(g_i2c_h.perip);
 	g_trnf_buf[0] = msb;
 	g_trnf_buf[1] = lsb;
 	g_i2c_h.len = 2; // Always 2 byte commands
-
-	i2c_bus_lock(g_i2c_h.perip);
+	lpm_disable_mode(LPM_MODE_LP_SLEEP, "HYGRO");
 	i2c_transmit(&g_i2c_h);
 
 	uint32_t event_bit;
 	status = kernel_event_wait(&g_event, EVENT_OK | EVENT_NACK | EVENT_ERR, &event_bit, true, false,
 							   1000);
+	lpm_enable_mode(LPM_MODE_LP_SLEEP, "HYGRO");
 	i2c_bus_unlock(g_i2c_h.perip);
 
 	if (status == STATUS_TIMEOUT || (event_bit & (EVENT_NACK | EVENT_ERR))) {
@@ -56,14 +58,15 @@ static enum bw_status send_cmd(uint8_t msb, uint8_t lsb)
 
 static enum bw_status recieve_data(uint8_t len)
 {
-	g_i2c_h.len = len;
-
 	i2c_bus_lock(g_i2c_h.perip);
+	g_i2c_h.len = len;
+	lpm_disable_mode(LPM_MODE_LP_SLEEP, "HYGRO");
 	i2c_receive(&g_i2c_h);
 
 	uint32_t event_bit;
 	enum bw_status status = kernel_event_wait(&g_event, EVENT_OK | EVENT_NACK | EVENT_ERR,
 											  &event_bit, true, false, 1000);
+	lpm_enable_mode(LPM_MODE_LP_SLEEP, "HYGRO");
 	i2c_bus_unlock(g_i2c_h.perip);
 
 	if (status == STATUS_TIMEOUT || (event_bit & (EVENT_NACK | EVENT_ERR))) {

@@ -44,10 +44,10 @@ OPT        := -Og
 DBGFLAGS   := -g3 -gdwarf-2
 C_DEFS     := -DDEBUG
 else
-BUILD_DIR := $(BUILD_ROOT)/release
-OPT       := -O2
-DBGFLAGS  :=
-C_DEFS    :=
+BUILD_DIR  := $(BUILD_ROOT)/release
+OPT        := -O2
+DBGFLAGS   :=
+C_DEFS     :=
 endif
 
 ifeq ($(LOGGER), rtt)
@@ -89,8 +89,7 @@ OBJS := $(C_OBJS) $(ASM_OBJS)
 STM32_PRG := ${STM32_PRG_PATH}/STM32_Programmer_CLI
 
 # OpenOCD
-OCD     := openocd -f openocd.cfg
-OCD_RTT := -c "rtt_start $(RTT_PORT)"
+OCD := openocd -f openocd.cfg
 
 # UART
 UART_PORT := $(firstword $(wildcard /dev/ttyACM*) $(wildcard /dev/ttyUSB*))
@@ -100,7 +99,7 @@ BLE_STACK_BIN  := $(CORE_BLE_STACK_BIN)
 BLE_STACK_ADDR := 0x080D0000
 
 # Rules
-.PHONY: all flash flash_ble flash_all monitor server debug erase clean compiledb check_core
+.PHONY: all flash flash_ble flash_all monitor server debug reset recover erase clean compiledb check_core
 
 all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin
 	@echo ""
@@ -158,16 +157,16 @@ flash_all: flash_ble flash
 # Monitor
 monitor:
 ifeq ($(LOGGER), rtt)
-	@echo "Starting RTT monitor (Ctrl+C to stop)..."
+	@echo "Starting RTT monitor on :$(RTT_PORT) (Ctrl+C to stop)..."
 	@$(OCD) \
 		-c "init" \
-		-c "reset run" \
-		$(OCD_RTT) & OCD_PID=$$!; \
+		-c "reset halt" \
+		-c "configure_dbgmcu" \
+		-c "rtt_start $(RTT_PORT) 0x20000008" & OCD_PID=$$!; \
 		trap "kill $$OCD_PID 2>/dev/null; wait $$OCD_PID 2>/dev/null" INT TERM EXIT; \
 		until nc -z localhost $(RTT_PORT) 2>/dev/null; do sleep 0.1; done; \
 		nc localhost $(RTT_PORT); \
-		kill $$OCD_PID 2>/dev/null; \
-		wait $$OCD_PID 2>/dev/null
+		wait $$OCD_PID
 else
 	@[ -n "$(UART_PORT)" ] || { echo "No serial port found"; exit 1; }
 	@echo "Opening $(UART_PORT) @ $(UART_BAUD) baud"
@@ -186,7 +185,7 @@ ifeq ($(METHOD), stlink)
 	@echo "Ctrl+C to stop"
 	@$(OCD) \
 		-c "init" \
-		$(OCD_RTT) & OCD_PID=$$!; \
+		-c "rtt_start $(RTT_PORT) 0x20000008" & OCD_PID=$$!; \
 		trap "kill $$OCD_PID 2>/dev/null; wait $$OCD_PID 2>/dev/null" INT TERM EXIT; \
 		until nc -z localhost $(RTT_PORT) 2>/dev/null; do sleep 0.1; done; \
 		nc localhost $(RTT_PORT) & NC_PID=$$!; \
@@ -198,7 +197,7 @@ endif
 # Debug — attach GDB to running server (make server first)
 debug:
 ifeq ($(METHOD), stlink)
-	@$(PREFIX)gdb -tui\
+	@$(PREFIX)gdb -tui \
 		-ex "set remotetimeout 10" \
 		-ex "target extended-remote :3333" \
 		-ex "break main" \
