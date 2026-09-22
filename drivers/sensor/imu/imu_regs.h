@@ -109,6 +109,7 @@
 #define IMU_INT1_MAP0_DTAP_Msk BIT(4)
 #define IMU_INT1_MAP0_NOMO_Msk BIT(3)
 #define IMU_INT1_MAP0_ANYMO_Msk BIT(2)
+#define IMU_INT1_MAP0_STEP_Msk BIT(0)
 
 #define IMU_INT1_MAP1 0x56
 #define IMU_INT1_MAP1_DRDY_Msk BIT(7)
@@ -122,6 +123,7 @@
 #define IMU_INT2_MAP2_DTAP_Msk BIT(4)
 #define IMU_INT2_MAP2_NOMO_Msk BIT(3)
 #define IMU_INT2_MAP2_ANYMO_Msk BIT(2)
+#define IMU_INT2_MAP2_STEP_Msk BIT(0)
 
 #define IMU_INT_MO0 0x5F
 #define IMU_INT_MO0_SN_DUR_Pos 2

@@ -51,6 +51,8 @@ enum bw_status imu_read_step_cnt(uint16_t *step_cnt);
 enum bw_status imu_clear_step_cnt();
 enum bw_status imu_enable_nomo_int();
 enum bw_status imu_disable_nomo_int();
+enum bw_status imu_enable_drdy_int();
+enum bw_status imu_disable_drdy_int();
 enum bw_status imu_start_stream(bool gyro_en);
 enum bw_status imu_read_sample(struct acc_sample *acc, struct gyr_sample *gyr);
 enum bw_status imu_stop_stream();
