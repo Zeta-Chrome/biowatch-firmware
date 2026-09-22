@@ -10,23 +10,22 @@
 #include "kernel/task/task.h"
 #include "kernel/timer.h"
 #include "lib/logger.h"
-#include "stdbool.h"
-#include "subsys/ui/widget.h"
 #include "task_vitals.h"
 #include "assets/fonts/tamzen12b.h"
 #include "assets/fonts/tamzen9.h"
 #include "drivers/gpio/gpio.h"
 #include "drivers/rtc/rtc.h"
 #include "kernel/critical.h"
-#include "subsys/ui/ui.h"
+#include "ui/ui.h"
 #include "biowatch/bsp.h"
 #include "kernel/kernel.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdbool.h>
 
-#define BTN_DEBOUNCE 30
-#define BTN_REPEAT_MS 250
+#define BTN_DEBOUNCE 50
+#define BTN_REPEAT_MS 150
 #define BTN_FAST_REPEAT_MS 90
 #define NEXT_BTN BIT(0)
 #define CLICK_BTN BIT(1)
@@ -962,29 +961,55 @@ static void update_act_display(void)
 	ui_widget_update_text(g_app_page.activity_header, g_app_page.act_buf);
 }
 
-static void update_vitals_display(void)
+static void update_vitals_display(bool error)
 {
-	struct vitals_record rec;
-	task_vitals_get_latest_record(&rec);
+	enum vitals_measuring last_measuring = g_vitals_page.measuring;
+	g_vitals_page.measuring = VITALS_IDLE;
 
-	if (rec.type == VITALS_TYPE_HR) {
-		g_vitals_page.measuring = VITALS_IDLE;
-		bw_str_format(g_vitals_page.hr_buf, sizeof(g_vitals_page.hr_buf), "%u bpm",
-					  rec.value.hr_bpm);
-		if (g_vitals_page.hr_text)
-			ui_widget_update_text(g_vitals_page.hr_text, g_vitals_page.hr_buf);
-	} else if (rec.type == VITALS_TYPE_SPO2) {
-		g_vitals_page.measuring = VITALS_IDLE;
-		int spo2x10 = (int)(rec.value.spo2_pct * 10.0f);
-		bw_str_format(g_vitals_page.spo2_buf, sizeof(g_vitals_page.spo2_buf), "%d.%d %%",
-					  spo2x10 / 10, spo2x10 % 10);
-		if (g_vitals_page.spo2_text)
-			ui_widget_update_text(g_vitals_page.spo2_text, g_vitals_page.spo2_buf);
+	if (error) {
+		if (last_measuring == VITALS_MEASURING_HR) {
+			bw_str_format(g_vitals_page.hr_buf, sizeof(g_vitals_page.hr_buf), "Retry");
+			if (g_vitals_page.hr_text)
+				ui_widget_update_text(g_vitals_page.hr_text, g_vitals_page.hr_buf);
+		} else if (last_measuring == VITALS_MEASURING_SPO2) {
+			bw_str_format(g_vitals_page.spo2_buf, sizeof(g_vitals_page.spo2_buf), "Retry");
+			if (g_vitals_page.spo2_text)
+				ui_widget_update_text(g_vitals_page.spo2_text, g_vitals_page.spo2_buf);
+		} else {
+			struct vitals_record rec;
+			task_vitals_get_latest_record(&rec);
+			if (rec.type == VITALS_TYPE_HR) {
+				bw_str_format(g_vitals_page.hr_buf, sizeof(g_vitals_page.hr_buf), "Retry");
+				if (g_vitals_page.hr_text)
+					ui_widget_update_text(g_vitals_page.hr_text, g_vitals_page.hr_buf);
+			} else {
+				bw_str_format(g_vitals_page.spo2_buf, sizeof(g_vitals_page.spo2_buf), "Retry");
+				if (g_vitals_page.spo2_text)
+					ui_widget_update_text(g_vitals_page.spo2_text, g_vitals_page.spo2_buf);
+			}
+		}
+	} else {
+		struct vitals_record rec;
+		task_vitals_get_latest_record(&rec);
+
+		if (rec.type == VITALS_TYPE_HR) {
+			bw_str_format(g_vitals_page.hr_buf, sizeof(g_vitals_page.hr_buf), "%u bpm",
+						  rec.value.hr_bpm);
+			if (g_vitals_page.hr_text)
+				ui_widget_update_text(g_vitals_page.hr_text, g_vitals_page.hr_buf);
+		} else if (rec.type == VITALS_TYPE_SPO2) {
+			int spo2x10 = (int)(rec.value.spo2_pct * 10.0f);
+			bw_str_format(g_vitals_page.spo2_buf, sizeof(g_vitals_page.spo2_buf), "%d.%d %%",
+						  spo2x10 / 10, spo2x10 % 10);
+			if (g_vitals_page.spo2_text)
+				ui_widget_update_text(g_vitals_page.spo2_text, g_vitals_page.spo2_buf);
+		}
 	}
 
 	bw_str_format(g_app_page.vitals_buf, sizeof(g_app_page.vitals_buf), "HR: %s   SPO2: %s",
 				  g_vitals_page.hr_buf, g_vitals_page.spo2_buf);
-	ui_widget_update_text(g_app_page.vitals_header, g_app_page.vitals_buf);
+	if (g_app_page.vitals_header)
+		ui_widget_update_text(g_app_page.vitals_header, g_app_page.vitals_buf);
 
 	sync_spinner_timer();
 }
@@ -1170,7 +1195,13 @@ void task_ui(void *user_data)
 
 		if (ntf & UI_VIT_CHANGED_NTF) {
 			kernel_task_notify(g_task_hap_h, HAPTICS_VIB_NTF, NOTIFY_ACTION_SET_BITS);
-			update_vitals_display();
+			update_vitals_display(false);
+			ntf |= UI_DRAW_NTF;
+		}
+
+		if (ntf & UI_VIT_ERROR_NTF) {
+			kernel_task_notify(g_task_hap_h, HAPTICS_VIB_NTF, NOTIFY_ACTION_SET_BITS);
+			update_vitals_display(true);
 			ntf |= UI_DRAW_NTF;
 		}
 
