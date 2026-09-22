@@ -92,7 +92,7 @@ void task_env(void *user_data)
 									  .tempx100 = (int16_t)(tempx100_sum / temp_count),
 									  .luxx100 = luxx100_sum / lux_count };
 			kernel_mqueue_overwrite(&g_env_mqueue, &rec);
-			kernel_task_notify(g_task_ble_h, BLE_ENV_CHANGED_NTF, NOTIFY_ACTION_SET_BITS);
+			kernel_task_notify(g_task_ble_h, BLE_DRAIN_QUEUE_NTF, NOTIFY_ACTION_SET_BITS);
 
 			// Reset accumulators for the next 10-minute window
 			secs = 0;

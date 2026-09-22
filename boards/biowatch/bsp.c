@@ -111,7 +111,7 @@ static void peripheral_init()
 	// IMU EXTI init
 	struct exti_handle *imu_exti_h = imu_get_exti_handle(&callback);
 	struct exti_conf imu_exti_conf = { .gpio = PL_IMU_EXTI1,
-									   .pupd = GPIO_PULL_NONE,
+									   .pupd = GPIO_PULL_UP,
 									   .edge = EXTI_EDGE_FALLING,
 									   .irq = PL_IMU_EXTI1_IRQn,
 									   .irq_priority = 6,

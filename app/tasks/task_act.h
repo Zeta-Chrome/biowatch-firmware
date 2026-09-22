@@ -5,6 +5,7 @@
 #include "lib/utils.h"
 
 #define ACT_NEW_REC_NTF BIT(1)
+#define ACT_RESET_NTF BIT(2)
 
 extern task_handle_t g_task_act_h;
 extern struct mqueue g_act_mqueue;

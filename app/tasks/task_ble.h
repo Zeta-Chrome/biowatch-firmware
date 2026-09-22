@@ -7,10 +7,8 @@
 #define BLE_START_NTF BIT(0)
 #define BLE_START_LP_ADV_NTF BIT(1)
 #define BLE_ACT_CHANGED_NTF BIT(2)
-#define BLE_VIT_CHANGED_NTF BIT(3)
-#define BLE_ENV_CHANGED_NTF BIT(4)
-#define BLE_DRAIN_QUEUE_NTF BIT(5)
-#define BLE_STOP_NTF BIT(6)
+#define BLE_DRAIN_QUEUE_NTF BIT(3)
+#define BLE_STOP_NTF BIT(4)
 
 extern task_handle_t g_task_ble_h;
 

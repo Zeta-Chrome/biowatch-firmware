@@ -1,13 +1,16 @@
 #include "task_ble.h"
 #include "app/settings.h"
 #include "app/tasks/task_ui.h"
+#include "drivers/rtc/rtc.h"
 #include "kernel/sync/mqueue.h"
 #include "kernel/task/task.h"
 #include "kernel/timer.h"
 #include "lib/status.h"
 #include "subsys/ble/ble.h"
+#include "subsys/ble/ble_defs.h"
 #include "subsys/ble/ble_sig_uuids.h"
 #include "subsys/ble/svc/svcctl.h"
+#include "core/kernel/critical.h"
 #include "task_act.h"
 #include "task_vitals.h"
 #include "task_env.h"
@@ -56,6 +59,11 @@
 		0x99, 0x68, 0xf7, 0xd7, 0xd0, 0xbf, 0x4e, 0xff, \
 		0xbb, 0xc6, 0xcb, 0x15, 0x1e, 0x04, 0x1f, 0xb1  \
 	}
+#define BLE_CHAR_TIME                                   \
+	{                                                   \
+		0xaa, 0x68, 0xf7, 0xd7, 0xd0, 0xbf, 0x4e, 0xff, \
+		0xbb, 0xc8, 0xcb, 0xa5, 0x1e, 0xb4, 0x1f, 0x01  \
+	}
 #define BLE_CHAR_WEIGHT_KG                              \
 	{                                                   \
 		0x7c, 0x27, 0xca, 0x38, 0x6e, 0x37, 0x44, 0x5b, \
@@ -65,6 +73,7 @@
 task_handle_t g_task_ble_h;
 static struct kernel_timer g_adv_timer = { .type = KERNEL_TIMER_ONE_SHOT, .user_data = NULL };
 static bool g_ble_user_enabled = false;
+static bool g_drain_remaining = false;
 
 enum notification_status { NOTIFICATION_DISABLED, NOTIFICATION_ENABLED };
 
@@ -94,6 +103,7 @@ static struct {
 
 static struct {
 	uint16_t handle;
+	uint16_t time;
 	uint16_t height;
 	uint16_t weight;
 } g_sett_svc;
@@ -109,15 +119,31 @@ static void on_notification_changed(const struct ble_char_evt *evt, void *ctx)
 	}
 }
 
+static void on_time_update(const struct ble_char_evt *evt, void *ctx)
+{
+	(void)ctx;
+	if (evt->type != BLE_CHAR_EVT_WRITE)
+		return;
+
+	uint32_t key = KERNEL_ENTER_CRITICAL();
+	rtc_set_timestamp(*(uint32_t *)evt->data);
+	KERNEL_EXIT_CRITICAL(key);
+	kernel_task_notify(g_task_ui_h, UI_UPDATE_CLOCK_NTF, NOTIFY_ACTION_SET_BITS);
+}
+
 static void on_settings_update(const struct ble_char_evt *evt, void *ctx)
 {
-	(void)evt;
-	(void)ctx;
-	BW_LOG("Settings updated\n");
+	if (evt->type != BLE_CHAR_EVT_WRITE)
+		return;
+
+	uint16_t *phy_param = (uint16_t *)ctx;
+	*phy_param = *(uint16_t *)evt->data;
+	kernel_task_notify(g_task_ui_h, UI_SET_CHANGED_NTF, NOTIFY_ACTION_SET_BITS);
 }
 
 static void build_gatt_db(void)
 {
+	// Device Information
 	ble_svcctl_add_svc(BLE_UUID16(BLE_SVC_DEVICE_INFORMATION), BLE_SVC_TYPE_PRIMARY,
 					   BLE_SVC_ATTR_RECORDS(2, 0), &g_dev_info_svc.handle);
 	ble_svcctl_add_char(g_dev_info_svc.handle, BLE_UUID16(BLE_CHAR_MANUFACTURER_NAME_STRING),
@@ -133,12 +159,14 @@ static void build_gatt_db(void)
 						   strlen(g_app_settings.fw_version),
 						   (const uint8_t *)g_app_settings.fw_version);
 
+	// Activity
 	ble_svcctl_add_svc(BLE_UUID128(BLE_SVC_ACTIVITY), BLE_SVC_TYPE_PRIMARY,
 					   BLE_SVC_ATTR_RECORDS(1, 1), &g_act_svc.handle);
 	ble_svcctl_add_char(g_act_svc.handle, BLE_UUID128(BLE_CHAR_ACT_DATA), sizeof(struct act_record),
 						BLE_CHAR_PROP_READ | BLE_CHAR_PROP_NOTIFY, BLE_CHAR_EVT_DONT_NOTIFY, false,
 						on_notification_changed, &g_act_svc.ntf_status, &g_act_svc.act_data);
 
+	// Vitals
 	ble_svcctl_add_svc(BLE_UUID128(BLE_SVC_VITALS_DATA), BLE_SVC_TYPE_PRIMARY,
 					   BLE_SVC_ATTR_RECORDS(1, 1), &g_vitals_svc.handle);
 	ble_svcctl_add_char(g_vitals_svc.handle, BLE_UUID128(BLE_CHAR_VITALS_DATA),
@@ -146,14 +174,19 @@ static void build_gatt_db(void)
 						BLE_CHAR_EVT_DONT_NOTIFY, false, on_notification_changed,
 						&g_vitals_svc.ntf_status, &g_vitals_svc.vitals_data);
 
+	// Environment
 	ble_svcctl_add_svc(BLE_UUID128(BLE_SVC_ENVIRONMENT), BLE_SVC_TYPE_PRIMARY,
 					   BLE_SVC_ATTR_RECORDS(1, 1), &g_env_svc.handle);
 	ble_svcctl_add_char(g_env_svc.handle, BLE_UUID128(BLE_CHAR_ENV_DATA), sizeof(struct env_record),
 						BLE_CHAR_PROP_READ | BLE_CHAR_PROP_NOTIFY, BLE_CHAR_EVT_DONT_NOTIFY, false,
 						on_notification_changed, &g_env_svc.ntf_status, &g_env_svc.env_data);
 
+	// Settings
 	ble_svcctl_add_svc(BLE_UUID128(BLE_SVC_SETTINGS), BLE_SVC_TYPE_PRIMARY,
-					   BLE_SVC_ATTR_RECORDS(2, 0), &g_sett_svc.handle);
+					   BLE_SVC_ATTR_RECORDS(3, 0), &g_sett_svc.handle);
+	ble_svcctl_add_char(g_sett_svc.handle, BLE_UUID128(BLE_CHAR_TIME), 4, BLE_CHAR_PROP_WRITE,
+						BLE_CHAR_EVT_NOTIFY_ATTRIBUTE_WRITE, false, on_time_update, NULL,
+						&g_sett_svc.time);
 	ble_svcctl_add_char(g_sett_svc.handle, BLE_UUID16(BLE_CHAR_HEIGHT), 2, BLE_CHAR_PROP_WRITE,
 						BLE_CHAR_EVT_NOTIFY_ATTRIBUTE_WRITE, false, on_settings_update,
 						&g_app_settings.height_cm, &g_sett_svc.height);
@@ -174,18 +207,30 @@ static void adv_timer_lp_expired(void *arg)
 	kernel_task_notify(g_task_ui_h, BLE_STOP_NTF, NOTIFY_ACTION_SET_BITS);
 }
 
-static void connection_evt_cb(void)
+static void connection_evt_cb()
 {
+	g_act_svc.ntf_status = NOTIFICATION_ENABLED;
+	g_vitals_svc.ntf_status = NOTIFICATION_ENABLED;
+	g_env_svc.ntf_status = NOTIFICATION_ENABLED;
 	kernel_timer_stop(&g_adv_timer);
 	kernel_task_notify(g_task_ui_h, UI_BLE_CONNECTED_NTF, NOTIFY_ACTION_SET_BITS);
 }
 
-static void disconnection_evt_cb(void)
+static void disconnection_evt_cb()
 {
+	g_act_svc.ntf_status = NOTIFICATION_DISABLED;
+	g_vitals_svc.ntf_status = NOTIFICATION_DISABLED;
+	g_env_svc.ntf_status = NOTIFICATION_DISABLED;
 	kernel_task_notify(g_task_ui_h, UI_BLE_DISCONNECTED_NTF, NOTIFY_ACTION_SET_BITS);
 
 	if (g_ble_user_enabled)
 		kernel_task_notify(g_task_ble_h, BLE_START_NTF, NOTIFY_ACTION_SET_BITS);
+}
+
+static void tx_free_evt_cb()
+{
+	if (g_drain_remaining)
+		kernel_task_notify(g_task_ble_h, BLE_DRAIN_QUEUE_NTF, NOTIFY_ACTION_SET_BITS);
 }
 
 void task_ble(void *user_data)
@@ -202,7 +247,8 @@ void task_ble(void *user_data)
 							 .mitm_protection = false,
 							 .bonding_mode = true,
 							 .connection_evt_cb = connection_evt_cb,
-							 .disconnection_evt_cb = disconnection_evt_cb };
+							 .disconnection_evt_cb = disconnection_evt_cb,
+							 .tx_free_evt_cb = tx_free_evt_cb };
 	ble_init(&conf);
 
 	while (1) {
@@ -248,48 +294,59 @@ void task_ble(void *user_data)
 		if (ntf & BLE_DRAIN_QUEUE_NTF) {
 			if (g_act_svc.ntf_status == NOTIFICATION_ENABLED) {
 				struct act_record act_rec;
-				while (kernel_mqueue_receive(&g_act_mqueue, (void *)&act_rec, 0) == STATUS_OK)
-					ble_svcctl_update_char(g_act_svc.handle, g_act_svc.act_data, 0,
-										   sizeof(struct act_record), (void *)&act_rec);
 				task_act_get_latest_record(&act_rec);
-				ble_svcctl_update_char(g_act_svc.handle, g_act_svc.act_data, 0,
-									   sizeof(struct act_record), (void *)&act_rec);
+				ble_status_t res = ble_svcctl_update_char(g_act_svc.handle, g_act_svc.act_data, 0,
+														  sizeof(struct act_record),
+														  (void *)&act_rec);
+				while (res == BLE_STATUS_SUCCESS &&
+					   kernel_mqueue_receive(&g_act_mqueue, (void *)&act_rec, 0) == STATUS_OK) {
+					res = ble_svcctl_update_char(g_act_svc.handle, g_act_svc.act_data, 0,
+												 sizeof(struct act_record), (void *)&act_rec);
+				}
+
+				if (res == BLE_STATUS_INSUFFICIENT_RESOURCES) {
+					g_drain_remaining = true;
+					continue;
+				}
+				g_drain_remaining = false;
 			}
 
 			if (g_vitals_svc.ntf_status == NOTIFICATION_ENABLED) {
+				ble_status_t res = BLE_STATUS_SUCCESS;
 				struct vitals_record vit_rec;
-				while (kernel_mqueue_receive(&g_vitals_mqueue, (void *)&vit_rec, 0) == STATUS_OK)
-					ble_svcctl_update_char(g_vitals_svc.handle, g_vitals_svc.vitals_data, 0,
-										   sizeof(struct vitals_record), (void *)&vit_rec);
+				while (res == BLE_STATUS_SUCCESS &&
+					   kernel_mqueue_receive(&g_vitals_mqueue, (void *)&vit_rec, 0) == STATUS_OK) {
+					res = ble_svcctl_update_char(g_vitals_svc.handle, g_vitals_svc.vitals_data, 0,
+												 sizeof(struct vitals_record), (void *)&vit_rec);
+				}
+				if (res == BLE_STATUS_INSUFFICIENT_RESOURCES) {
+					g_drain_remaining = true;
+					continue;
+				}
+				g_drain_remaining = false;
 			}
 
 			if (g_env_svc.ntf_status == NOTIFICATION_ENABLED) {
+				ble_status_t res = BLE_STATUS_SUCCESS;
 				struct env_record env_rec;
-				while (kernel_mqueue_receive(&g_env_mqueue, (void *)&env_rec, 0) == STATUS_OK)
-					ble_svcctl_update_char(g_env_svc.handle, g_env_svc.env_data, 0,
-										   sizeof(struct env_record), (void *)&env_rec);
+				while (res == BLE_STATUS_SUCCESS &&
+					   kernel_mqueue_receive(&g_env_mqueue, (void *)&env_rec, 0) == STATUS_OK) {
+					res = ble_svcctl_update_char(g_env_svc.handle, g_env_svc.env_data, 0,
+												 sizeof(struct env_record), (void *)&env_rec);
+				}
+				if (res == BLE_STATUS_INSUFFICIENT_RESOURCES) {
+					g_drain_remaining = true;
+					continue;
+				}
+				g_drain_remaining = false;
 			}
 		}
 
 		if (g_act_svc.ntf_status == NOTIFICATION_ENABLED && ntf & BLE_ACT_CHANGED_NTF) {
-			struct act_record rec;
-			task_act_get_latest_record(&rec);
+			struct act_record act_rec;
+			task_act_get_latest_record(&act_rec);
 			ble_svcctl_update_char(g_act_svc.handle, g_act_svc.act_data, 0,
-								   sizeof(struct act_record), (void *)&rec);
-		}
-
-		if (g_vitals_svc.ntf_status == NOTIFICATION_ENABLED && ntf & BLE_VIT_CHANGED_NTF) {
-			struct vitals_record rec;
-			task_vitals_get_latest_record(&rec);
-			ble_svcctl_update_char(g_vitals_svc.handle, g_vitals_svc.vitals_data, 0,
-								   sizeof(struct vitals_record), (void *)&rec);
-		}
-
-		if (g_env_svc.ntf_status == NOTIFICATION_ENABLED && ntf & BLE_ENV_CHANGED_NTF) {
-			struct env_record rec;
-			task_env_get_latest_record(&rec);
-			ble_svcctl_update_char(g_env_svc.handle, g_env_svc.env_data, 0,
-								   sizeof(struct env_record), (void *)&rec);
+								   sizeof(struct act_record), (void *)&act_rec);
 		}
 	}
 }
