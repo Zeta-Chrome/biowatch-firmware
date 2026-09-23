@@ -2,6 +2,8 @@
 
 **BioWatch** — a health-monitoring smartwatch built on the **STM32WB55** dual-core wireless MCU, running a custom RTOS and a fully interrupt-driven driver stack. No STM32 HAL/LL/CubeMX code — every peripheral is driven directly at the register level, via [biowatch-core](https://github.com/Zeta-Chrome/biowatch-core).
 
+https://github.com/user-attachments/assets/f9040234-31b1-4d4e-a5ed-45e6ad0a14ee
+
 ## Hardware
 
 | Sensor | Bus | Measures |
