@@ -38,8 +38,9 @@
 #define REFRACTORY_SAMPLES DIVC(SAMPLE_RATE_HZ * 60, MAX_HR_BPM)
 #define MAX_IBI_SAMPLES DIVC(SAMPLE_RATE_HZ * 60, MIN_HR_BPM)
 
-#define SPO2_A 110
-#define SPO2_B 25
+#define SPO2_A -10.0f
+#define SPO2_B 3.0f
+#define SPO2_C 101.0f
 
 #define PPG_MIN_RAW_DC_COUNTS 15000.0f
 #define PPG_MIN_AC_ENERGY 0.0003f
@@ -274,7 +275,7 @@ static float32_t read_spo2(float32_t *red_ppg, float32_t *ir_ppg, float32_t red_
 	}
 
 	float32_t r = (red_ac / red_dc) / (ir_ac / ir_dc);
-	float32_t spo2 = SPO2_A - SPO2_B * r;
+	float32_t spo2 = SPO2_A * r * r + SPO2_B * r + SPO2_C;
 
 	if (spo2 < 70.0f || spo2 > 100.0f) {
 		BW_LOG("read_spo2: Result out of physiological bounds: %f%%\n", spo2);
