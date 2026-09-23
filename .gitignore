@@ -1,6 +1,5 @@
 .gdb_history
 .cache
 gdb.log
-docs
 build
 compile_commands.json
