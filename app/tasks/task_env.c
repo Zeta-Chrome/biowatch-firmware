@@ -85,8 +85,8 @@ void task_env(void *user_data)
 		}
 		lpm_enable_mode(LPM_MODE_LP_SLEEP, "LDR");
 
-		// Every 10 mintues
-		if (secs >= 600) {
+		// Every 1 mintue
+		if (secs >= 60) {
 			struct env_record rec = { .timestamp = rtc_get_timestamp(),
 									  .rhx100 = rhx100_sum / temp_count,
 									  .tempx100 = (int16_t)(tempx100_sum / temp_count),

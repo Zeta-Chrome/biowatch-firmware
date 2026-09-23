@@ -161,7 +161,6 @@ void task_act(void *user_data)
 			status = imu_read_int_status(int_status);
 			if (status == STATUS_OK) {
 				if (int_status[0] & IMU_INT_ST0_STEP_Msk) {
-					BW_LOG("STEP\n");
 					act_metrics_on_step();
 					kernel_timer_start(&g_inactive_timer);
 					kernel_task_notify(g_task_ui_h, UI_ACT_CHANGED_NTF, NOTIFY_ACTION_SET_BITS);
@@ -171,7 +170,6 @@ void task_act(void *user_data)
 					act_metrics_reset(NULL);
 				}
 				if (int_status[1] & IMU_INT_ST1_DRDY_Msk) {
-					BW_LOG("DATA RDY\n");
 					act_metrics_add_acc();
 				}
 			}

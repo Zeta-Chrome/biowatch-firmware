@@ -138,6 +138,7 @@ static void on_settings_update(const struct ble_char_evt *evt, void *ctx)
 
 	uint16_t *phy_param = (uint16_t *)ctx;
 	*phy_param = *(uint16_t *)evt->data;
+	BW_LOG("%d %d\n", *phy_param, *(uint16_t *)evt->data);
 	kernel_task_notify(g_task_ui_h, UI_SET_CHANGED_NTF, NOTIFY_ACTION_SET_BITS);
 }
 
