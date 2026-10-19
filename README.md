@@ -20,21 +20,57 @@ Companion mobile app: [biowatch-app](https://github.com/Zeta-Chrome/biowatch-app
 ## Repository layout
 
 ```
-core/               biowatch-core submodule (RTOS, drivers, BLE transport — see its own docs/)
-boards/biowatch/    Pin map (pins.h) + board bring-up (bsp.c) — the one file that knows the physical wiring
+core/                       biowatch-core submodule (RTOS, drivers, BLE transport — see its own docs/)
+boards/biowatch/            Pin map (pins.h) + board bring-up (bsp.c) — the one file that knows the physical wiring
+  ├── bsp.c
+  ├── bsp.h
+  └── pins.h
 drivers/
-  ├─ display/         OLED command/frame-buffer driver
+  ├─ display/               OLED command/frame-buffer driver
+  │   ├── display.c
+  │   ├── display_cmds.h
+  │   └── display.h  
   └─ sensor/
-      ├─ imu/          BMI160
-      ├─ oxim/         MAX3010x (HR/SpO2 front end)
-      └─ hygro/        Temp/humidity sensor
-ui/                 Custom static UI toolkit (containers, widgets, selection/focus, screen timeout)
-assets/             Fonts + bitmaps compiled in as C arrays
+      ├─ imu/               BMI160
+      │   ├── hygro.c
+      │   ├── hygro.h
+      │   └── hygro_regs.h
+      ├─ oxim/              MAX3010x (HR/SpO2 front end)
+      │   ├── oxim.c
+      │   ├── oxim.h
+      │   └── oxim_regs.h
+      └─ hygro/             Temp/humidity sensor
+         ├── hygro.c
+         ├── hygro.h
+         └── hygro_regs.h
+ui/                         Custom static UI toolkit (containers, widgets, selection/focus, screen timeout)
+  ├── ui.c
+  ├── ui_common.h
+  ├── ui.h
+  ├── widget.c
+  └── widget.h
+assets/                     Fonts + bitmaps compiled in as C arrays
+  ├── bitmaps
+  └── fonts
 app/
-  ├─ main.c          Boot, peripheral_init(), kernel_init()/kernel_start()
-  ├─ settings.c       Persisted user/device settings (height, weight, name, BLE state, etc.)
-  └─ tasks/           One file per RTOS task — see docs/tasks.md
-Makefile            Builds app + core into BioWatch.elf/.hex/.bin
+  ├─ main.c                 Boot, peripheral_init(), kernel_init()/kernel_start()
+  ├─ settings.c             Persisted user/device settings (height, weight, name, BLE state, etc.)
+  └─ tasks/                 One file per RTOS task — see docs/tasks.md
+    ├── task_act.c
+    ├── task_act.h
+    ├── task_ble.c
+    ├── task_ble.h
+    ├── task_env.c
+    ├── task_env.h
+    ├── task_haptics.c
+    ├── task_haptics.h
+    ├── tasks.c
+    ├── tasks.h
+    ├── task_ui.c
+    ├── task_ui.h
+    ├── task_vitals.c
+    └── task_vitals.h
+Makefile                    Builds app + core into BioWatch.elf/.hex/.bin
 ```
 
 ## Building
